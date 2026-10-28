@@ -1,0 +1,12 @@
+# Java
+target/
+*.properties
+*.yml
+
+# Python
+venv/
+__pycache__/
+.env
+
+# OS
+.DS_Store

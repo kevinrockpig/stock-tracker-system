@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>投資追蹤系統 (Phase 1)</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+</head>
+<body>
+    <div id="app" class="container">
+        <h2>📈 個股走勢查詢</h2>
+        <input v-model="ticker" placeholder="例: 2330.TW 或 AAPL" class="search-input">
+        <button @click="fetchData" class="search-btn">查詢</button>
+        
+        <div v-if="loading" class="loading-banner">
+            <strong>⏳ 系統連線/資料載入中...</strong><br>
+            本展示系統部署於雲端空間。若主機處於休眠狀態，首次載入約需 40~50 秒，請耐心等候。
+        </div>
+        
+        <div id="chart" style="margin-top: 20px;"></div>
+    </div>
+
+    <script src="js/main.js"></script>
+</body>
+</html>
