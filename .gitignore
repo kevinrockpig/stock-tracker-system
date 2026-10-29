@@ -1,12 +1,21 @@
 # Java
 target/
-*.properties
-*.yml
+# 本機覆寫設定可放真實值，不提交；application.properties 只使用 ${ENV} 佔位符，需要提交
+application-local.properties
+application-local.yml
 
 # Python
 venv/
+.venv/
 __pycache__/
 .env
+.env.*
+!.env.example
+logs/
+
+# Node
+node_modules/
+dist/
 
 # OS
 .DS_Store

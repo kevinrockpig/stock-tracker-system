@@ -1,26 +1,17 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-TW">
-<head>
-    <meta charset="UTF-8">
-    <title>投資追蹤系統 (Phase 1)</title>
-    <link rel="stylesheet" href="css/style.css">
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
-</head>
-<body>
-    <div id="app" class="container">
-        <h2>📈 個股走勢查詢</h2>
-        <input v-model="ticker" placeholder="例: 2330.TW 或 AAPL" class="search-input">
-        <button @click="fetchData" class="search-btn">查詢</button>
-        
-        <div v-if="loading" class="loading-banner">
-            <strong>⏳ 系統連線/資料載入中...</strong><br>
-            本展示系統部署於雲端空間。若主機處於休眠狀態，首次載入約需 40~50 秒，請耐心等候。
-        </div>
-        
-        <div id="chart" style="margin-top: 20px;"></div>
-    </div>
-
-    <script src="js/main.js"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 內嵌 SVG 圖示：簡化的紅綠 K 線，避免瀏覽器請求 /favicon.ico 出現 404 -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 1v14M12 3v10' stroke='%23555'/%3E%3Crect x='2' y='4' width='4' height='7' fill='%23d1242f'/%3E%3Crect x='10' y='6' width='4' height='5' fill='%231a7f37'/%3E%3C/svg%3E"
+    />
+    <title>股票追蹤系統</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
 </html>
