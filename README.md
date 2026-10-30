@@ -33,7 +33,7 @@ flowchart LR
 
 | 順序 | 服務 | 指令 | 說明 |
 |---|---|---|---|
-| 1 | Python | `cd stock-scraper-python && ./scripts/run_daily.sh` | 建立資料表並寫入資料；之後每天收盤後執行一次即可（也可在 Finder 點兩下 `scripts/update-stock-data.command`） |
+| 1 | Python | `cd stock-scraper-python && ./scripts/run_daily.sh` | 建立資料表並寫入資料；之後每天收盤後執行一次即可：可在 Finder 點兩下 `scripts/update-stock-data.command`，或用 `scripts/install_schedule.sh` 安裝每日自動排程 |
 | 2 | Java | IntelliJ 執行 `StockApiJavaApplication` | API 位於 `http://localhost:8081` |
 | 3 | Vue | `cd stock-frontend-vue/stock-tracker && npm run dev` | 開啟 `http://localhost:5173` |
 
@@ -62,9 +62,12 @@ flowchart LR
 | 資料表 | 內容 | 識別方式 |
 |---|---|---|
 | `stocks` | 股票基本資料（代號、名稱、幣別） | `symbol` |
-| `stock_prices` | 日 K：開高低收、成交量 | `(symbol, trade_date)` 唯一 |
-| `stock_indicators` | MA5/10/20/60、MACD、RSI6/12、KD | 與 `stock_prices` 一對一（外鍵） |
+| `stock_prices` | 日 K：開高低收、成交量（2015-06-01 起） | `(symbol, trade_date)` 唯一 |
+| `stock_actions` | 除權息與股本事件：現金股利、配股 / 減資 / 分割比例（回測計算還原報酬用） | `(symbol, ex_date)` 唯一 |
+| `stock_indicators` | MA5/10/20/60、MACD、RSI6/12、KD、ATR14 | 與 `stock_prices` 一對一（外鍵） |
 | `strategy_signals` | 某股票某交易日符合某策略 | `(symbol, trade_date, strategy)` 唯一 |
+| `backtest_trades` | 策略回測的每筆交易（4 種出場規則） | `(strategy, symbol, exit_rule, entry_date)` 唯一 |
+| `backtest_stats` | 策略回測統計（個別股票與全部合併），含任意日進場與買進持有基準 | `(strategy, scope, exit_rule)` 唯一 |
 | `official_daily_quotes` | 證交所 / 櫃買中心開放資料的原始日成交資訊（全部股票與 ETF，每日累積，目前尚未用於畫面） | `(market, code, trade_date)` 唯一 |
 | `official_corporate_actions` | 證交所 / 櫃買中心的除權除息預告（現金股利、配股比例，每日累積） | `(market, code, ex_date)` 唯一 |
 

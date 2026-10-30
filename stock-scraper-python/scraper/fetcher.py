@@ -1,7 +1,10 @@
 """使用 yfinance 擷取日行情，並以 Pandas 清理成可寫入資料庫的格式。"""
 
 import logging
+import statistics
 import warnings
+from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 
 import pandas as pd
@@ -26,14 +29,19 @@ class FetchError(RuntimeError):
     """yfinance 無法取得可用資料。"""
 
 
-def fetch_daily_prices(symbol: str, period: str) -> tuple[pd.DataFrame, str | None]:
-    """擷取日 K，回傳 (清理後的 DataFrame, 幣別)。
+@dataclass
+class FetchResult:
+    prices: pd.DataFrame  # 欄位：trade_date, open_price, high_price, low_price, close_price, volume
+    currency: str | None
+    actions: pd.DataFrame  # 欄位：ex_date, cash_dividend, split_ratio（只含有事件的日期）
 
-    DataFrame 欄位：trade_date, open_price, high_price, low_price, close_price, volume
-    """
+
+def fetch_daily_prices(symbol: str, start: date) -> FetchResult:
+    """擷取 start（含）之後的日 K 與除權息事件。"""
     ticker = yf.Ticker(symbol)
-    # auto_adjust=False：不還原除息，價格與券商報價一致（股票分割仍由 Yahoo 調整，分割前後價格可連續比較）
-    raw = ticker.history(period=period, interval="1d", auto_adjust=False, actions=False)
+    # auto_adjust=False：不還原除息，價格與券商報價一致。
+    # 配股、減資、分割則由 Yahoo 調整：事件之前的價格與股利都等比例換算，前後可連續比較（例如 0050 於 2025 年 6 月 1 拆 4）
+    raw = ticker.history(start=start.isoformat(), interval="1d", auto_adjust=False, actions=True)
     if raw.empty:
         raise FetchError(f"{symbol} 沒有取得任何資料（代號錯誤、已下市，或 Yahoo 暫時阻擋請求）")
 
@@ -42,7 +50,41 @@ def fetch_daily_prices(symbol: str, period: str) -> tuple[pd.DataFrame, str | No
     df = _drop_unfinished_bar(symbol, df, meta)
     if df.empty:
         raise FetchError(f"{symbol} 清理後沒有可用的收盤資料")
-    return df, meta.get("currency")
+    return FetchResult(df, meta.get("currency"), extract_actions(raw))
+
+
+def extract_actions(raw: pd.DataFrame) -> pd.DataFrame:
+    """取出有現金股利或股數變動的日期（在清理之前取，避免除權息日剛好是被略過的資料）。"""
+    dividends = raw.get("Dividends", pd.Series(0.0, index=raw.index)).fillna(0)
+    splits = raw.get("Stock Splits", pd.Series(0.0, index=raw.index)).fillna(0)
+    has_event = (dividends != 0) | (splits != 0)
+    return pd.DataFrame({
+        "ex_date": raw.index[has_event].date,
+        "cash_dividend": dividends[has_event].round(6).where(lambda v: v != 0).to_numpy(),
+        "split_ratio": splits[has_event].round(6).where(lambda v: v != 0).to_numpy(),
+    })
+
+
+# Yahoo 在配股、減資、分割後會把「之前所有」價格等比例重算；增量抓取時，資料庫中更早的資料不會跟著更新，
+# 價格會在事件前後接不起來。比對本次抓到的最舊幾天（與資料庫重疊的日期）的收盤價，整體差超過容許值就代表需要重抓完整歷史。
+READJUST_CHECK_DAYS = 5
+READJUST_TOLERANCE = 0.001  # 0.1%：遠大於四捨五入誤差，遠小於任何配股或減資比例
+
+
+def detect_readjustment(fetched: pd.DataFrame, stored_closes: dict) -> str | None:
+    """fetched：本次抓到的日 K（由舊到新）；stored_closes：同日期在資料庫中的收盤價。有重新調整時回傳說明。"""
+    pairs = [
+        (row.trade_date, float(stored_closes[row.trade_date]), float(row.close_price))
+        for row in fetched.head(READJUST_CHECK_DAYS).itertuples()
+        if row.trade_date in stored_closes and stored_closes[row.trade_date]
+    ]
+    if not pairs:
+        return None
+    ratio = statistics.median(new / old for _, old, new in pairs)
+    if abs(ratio - 1) <= READJUST_TOLERANCE:
+        return None
+    day, old, new = pairs[0]
+    return f"Yahoo 已重新調整歷史價格（{day} 收盤 資料庫 {old:g} → 現在 {new:g}，比例 {ratio:.4f}，可能是配股、減資或分割）"
 
 
 def _clean(symbol: str, raw: pd.DataFrame) -> pd.DataFrame:
@@ -103,6 +145,17 @@ def _drop_unfinished_bar(symbol: str, df: pd.DataFrame, meta: dict) -> pd.DataFr
         logger.info("%s 尚未收盤（收盤時間 %s），略過 %s 的盤中資料", symbol, end.strftime("%H:%M %Z"), last_date)
         return df.iloc[:-1]
     return df
+
+
+def to_action_records(symbol: str, actions: pd.DataFrame) -> list[dict]:
+    def decimal_or_none(value):
+        return None if pd.isna(value) else Decimal(str(value))
+
+    return [
+        {"symbol": symbol, "ex_date": row.ex_date,
+         "cash_dividend": decimal_or_none(row.cash_dividend), "split_ratio": decimal_or_none(row.split_ratio)}
+        for row in actions.itertuples(index=False)
+    ]
 
 
 def to_records(symbol: str, df: pd.DataFrame) -> list[dict]:

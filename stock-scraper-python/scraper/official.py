@@ -17,12 +17,15 @@
 
 import argparse
 import csv
+import http.client
 import io
 import json
 import logging
 import os
 import re
 import sys
+import time
+import urllib.error
 import urllib.request
 from collections import defaultdict
 from dataclasses import dataclass
@@ -47,6 +50,9 @@ from scraper.db import (
 logger = logging.getLogger("scraper.official")
 
 TIMEOUT_SECONDS = 30
+# 連線中斷（例如 IncompleteRead：下載到一半被切斷）、逾時、伺服器暫時錯誤時重試；間隔每次加倍（5、10 秒）
+FETCH_ATTEMPTS = 3
+RETRY_DELAY_SECONDS = 5
 TAIPEI = ZoneInfo("Asia/Taipei")  # GitHub Actions 主機為 UTC，日期一律以台灣時間判斷
 
 # 4 碼為普通股（含 0050 這類 4 碼 ETF）；00 開頭的 5～6 碼為 ETF / ETN（例如 006208、00400A）。
@@ -219,10 +225,25 @@ SOURCES = [
 
 # ---------- 執行 ----------
 
-def fetch(url: str) -> bytes:
+def fetch(url: str, attempts: int = FETCH_ATTEMPTS, delay: float = RETRY_DELAY_SECONDS, sleep=time.sleep) -> bytes:
+    """下載官方資料；暫時性的錯誤會重試，網址錯誤等其他 4xx 不重試（重試也不會成功）。"""
     request = urllib.request.Request(url, headers={"User-Agent": "stock-tracker-system (open data daily archive)"})
-    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-        return response.read()
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+                return response.read()
+        except urllib.error.HTTPError as exc:
+            if (exc.code < 500 and exc.code != 429) or attempt == attempts:
+                raise
+            error = exc
+        except (http.client.HTTPException, OSError) as exc:  # IncompleteRead、連線中斷、逾時、DNS 失敗等
+            if attempt == attempts:
+                raise
+            error = exc
+        logger.warning("下載失敗（第 %d / %d 次），%g 秒後重試：%s", attempt, attempts, delay, error)
+        sleep(delay)
+        delay *= 2
+    raise AssertionError("unreachable")
 
 
 def keep_stocks_and_etfs(rows: list[dict]) -> list[dict]:

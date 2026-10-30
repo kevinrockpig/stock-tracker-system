@@ -12,12 +12,11 @@
 
 ## 功能
 
-- [ ] **每日自動排程（macOS launchd）**
-  - 腳本已完成：`stock-scraper-python/scripts/install_schedule.sh`
-  - 目前使用手動一鍵更新：`stock-scraper-python/scripts/update-stock-data.command`
+- [x] 每日自動排程（macOS launchd，2026-10-30 安裝）：`stock-scraper-python/scripts/install_schedule.sh`，結束時以 macOS 通知顯示結果
 - [x] 網站內的使用說明頁與免責聲明（2026-10-30，`/about`；每頁頁尾附免責聲明連結）
 - [x] 個股頁記住區間與指標顯示設定（2026-10-30，存在瀏覽器，所有個股共用）
 - [x] 長頁面導覽（2026-10-30）：導覽列固定在頂端、說明頁目錄固定並標示目前段落、「回到頂端」按鈕、上一頁回到原捲動位置
+- [ ] **策略回測（Phase 6）**：1a 補齊 2015-06-01 起的歷史資料、1b 回測計算（2026-10-30 完成）→ Java API → 畫面
 - [ ] **整體 UI/UX 檢視**：版面與導覽一致性、手機版操作、載入與錯誤狀態、鍵盤操作與無障礙
   - 已知：在個股頁時，導覽列的「股票清單」不會標示為目前所在位置
 

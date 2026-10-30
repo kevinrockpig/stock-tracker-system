@@ -1,4 +1,4 @@
-"""技術指標計算：MA、MACD、RSI 使用 TA-Lib，KD 依台股慣例自行實作。
+"""技術指標計算：MA、MACD、RSI、ATR 使用 TA-Lib，KD 依台股慣例自行實作。
 
 輸入為資料庫讀出、只含交易日的日 K（依日期由舊到新），因此 MA20 代表 20 個「交易日」，
 週末、國定假日與颱風假不會被算進去。輸出筆數與日期和輸入完全相同。
@@ -14,11 +14,12 @@ MA_PERIODS = (5, 10, 20, 60)
 MACD_FAST, MACD_SLOW, MACD_SIGNAL = 12, 26, 9
 RSI_PERIODS = (6, 12)
 KD_PERIOD = 9
+ATR_PERIOD = 14
 
-# MACD、RSI、KD 是遞迴平滑（EMA / Wilder 平滑 / 1/3 平滑），起始值會影響前段數值，
-# 需要一段資料暖身才會與券商軟體一致。前 WARMUP_BARS 筆不輸出這三種指標（MA 不受影響）。
+# MACD、RSI、KD、ATR 是遞迴平滑（EMA / Wilder 平滑 / 1/3 平滑），起始值會影響前段數值，
+# 需要一段資料暖身才會與券商軟體一致。前 WARMUP_BARS 筆不輸出這些指標（MA 不受影響）。
 WARMUP_BARS = 120
-RECURSIVE_COLUMNS = ("macd_dif", "macd_signal", "macd_osc", "rsi6", "rsi12", "kd_k", "kd_d")
+RECURSIVE_COLUMNS = ("macd_dif", "macd_signal", "macd_osc", "rsi6", "rsi12", "kd_k", "kd_d", "atr14")
 
 
 def compute_indicators(prices: pd.DataFrame) -> pd.DataFrame:
@@ -39,6 +40,9 @@ def compute_indicators(prices: pd.DataFrame) -> pd.DataFrame:
         result[f"rsi{period}"] = talib.RSI(close, timeperiod=period)
 
     result["kd_k"], result["kd_d"] = taiwan_kd(high, low, close, KD_PERIOD)
+
+    # ATR（平均真實波幅，Wilder 平滑）：每日波動的典型幅度，單位與股價相同；移動停利與停損參考依此調整距離
+    result["atr14"] = talib.ATR(high, low, close, timeperiod=ATR_PERIOD)
 
     result.loc[: WARMUP_BARS - 1, list(RECURSIVE_COLUMNS)] = np.nan
     return result

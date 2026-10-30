@@ -1,12 +1,17 @@
-"""官方開放資料解析與備份單元測試：python -m pytest（不連線網路與資料庫）"""
+"""官方開放資料解析、備份與下載重試單元測試：python -m pytest（不連線網路與資料庫）"""
 
 import csv
 import gzip
+import http.client
 import io
 import json
+import urllib.error
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
+from scraper import official
 from scraper.archive import archive_path, write_archive
 from scraper.db import CORPORATE_ACTION_VALUE_COLUMNS, OFFICIAL_VALUE_COLUMNS
 from scraper.official import (
@@ -165,3 +170,63 @@ def test_archive_rewrites_when_content_changes(tmp_path):
     write_archive(tmp_path, "twse_csv", day, records)
     changed = [dict(records[0], 收盤價="2420.00")] + records[1:]
     assert write_archive(tmp_path, "twse_csv", day, changed) is True
+
+
+# ---------- 下載重試（不連網：以假的 urlopen 模擬） ----------
+
+class FakeResponse:
+    def __init__(self, body: bytes):
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self.body
+
+
+def fake_urlopen(monkeypatch, outcomes):
+    """依序回傳 outcomes：例外就拋出，bytes 就當作下載成功的內容。回傳實際呼叫次數的紀錄。"""
+    calls = []
+
+    def urlopen(request, timeout):
+        outcome = outcomes[len(calls)]
+        calls.append(request.full_url)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return FakeResponse(outcome)
+
+    monkeypatch.setattr(official.urllib.request, "urlopen", urlopen)
+    return calls
+
+
+def http_error(code):
+    return urllib.error.HTTPError("https://example.invalid", code, "error", {}, None)
+
+
+def test_fetch_retries_incomplete_read_then_succeeds(monkeypatch):
+    calls = fake_urlopen(monkeypatch, [http.client.IncompleteRead(b"partial", 100), TimeoutError(), b"ok"])
+    waits = []
+    assert official.fetch("https://example.invalid", sleep=waits.append) == b"ok"
+    assert len(calls) == 3
+    assert waits == [5, 10]  # 間隔每次加倍
+
+
+def test_fetch_retries_server_errors_but_not_not_found(monkeypatch):
+    fake_urlopen(monkeypatch, [http_error(503), b"ok"])
+    assert official.fetch("https://example.invalid", sleep=lambda _: None) == b"ok"
+
+    calls = fake_urlopen(monkeypatch, [http_error(404)])
+    with pytest.raises(urllib.error.HTTPError):
+        official.fetch("https://example.invalid", sleep=lambda _: None)
+    assert len(calls) == 1  # 404 不重試
+
+
+def test_fetch_gives_up_after_all_attempts(monkeypatch):
+    calls = fake_urlopen(monkeypatch, [ConnectionResetError()] * 3)
+    with pytest.raises(ConnectionResetError):
+        official.fetch("https://example.invalid", sleep=lambda _: None)
+    assert len(calls) == 3

@@ -5,18 +5,10 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 
+# 結果說明（例如「更新完成。」）由 run_daily.sh 顯示在最後一行
 "${SCRIPT_DIR}/run_daily.sh"
-status=$?
 
 echo
-case ${status} in
-  0) echo "更新完成。" ;;
-  1) echo "部分股票更新失敗，請查看上方訊息。" ;;
-  2) echo "設定錯誤：請檢查 stock-scraper-python/.env。" ;;
-  3) echo "資料庫連線或結構錯誤，請查看上方訊息。" ;;
-  75) echo "已有更新正在執行中，這次沒有執行。" ;;
-  *) echo "發生未預期的錯誤（exit ${status}），請查看上方訊息。" ;;
-esac
 echo "完整紀錄：${SCRIPT_DIR%/scripts}/logs/daily-$(date +%Y-%m).log"
 echo
 read -n 1 -s -r -p "按任意鍵關閉視窗…"

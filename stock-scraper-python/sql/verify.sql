@@ -56,9 +56,11 @@ WHERE high_price < GREATEST(open_price, close_price)
 ORDER BY symbol, trade_date;
 
 -- 8. 其他股票都有、這檔卻缺少的交易日（只比對該股票自己的資料範圍）
---    已知例外（2026-10-29 確認）：
---      0050.TW 2025-06-11 ~ 2025-06-17：股票分割停止交易（正常）
---      2317.TW 2025-07-30、2317 / 2330 / 2454 2025-08-01：yfinance 資料來源缺漏，重新執行也補不回來
+--    已知例外（2026-10-30 補齊 2015-06-01 起的歷史後確認，共 21 列）：
+--      停止交易（正常）：0050.TW 2025-06-11 ~ 06-17（1 拆 4 分割）、2317.TW 2018-10-18 ~ 10-25（減資）
+--      yfinance 回傳成交量 0 的補值或缺漏（原因未查證，重新執行也補不回來）：
+--        2317.TW 2016-03-30、2454.TW 2016-05-13、2317 / 2330 / 2454 2021-08-17、0050.TW 2024-01-15、
+--        2317.TW 2025-07-30、2317 / 2330 / 2454 2025-08-01
 --    除上述日期外應回傳 0 列
 WITH all_dates AS (
     SELECT DISTINCT trade_date FROM stock_prices
@@ -179,3 +181,73 @@ SELECT pg_size_pretty(pg_database_size(current_database())) AS database_size;
 SELECT relname AS table_name, pg_size_pretty(pg_total_relation_size(relid)) AS total_size, n_live_tup AS rows
 FROM pg_stat_user_tables
 ORDER BY pg_total_relation_size(relid) DESC;
+
+-- 21. 完整歷史涵蓋範圍（回測用）：每檔應從 2015-06-01（config.HISTORY_START）附近開始，history_from 不應為 NULL
+SELECT s.symbol, s.name, s.history_from, MIN(p.trade_date) AS first_date, MAX(p.trade_date) AS last_date, COUNT(*) AS days
+FROM stocks s
+JOIN stock_prices p ON p.symbol = s.symbol
+GROUP BY s.symbol, s.name, s.history_from
+ORDER BY s.symbol;
+
+-- 22. 除權息與股本事件（yfinance）：現金股利與股數變動（配股、減資、分割），回測計算還原報酬時使用。
+--     金額已依之後的配股 / 減資 / 分割換算（與 stock_prices 的價格基準一致），殖利率可用來檢查是否合理
+SELECT a.symbol, a.ex_date, a.cash_dividend, a.split_ratio,
+       p.close_price AS prev_close,
+       ROUND(a.cash_dividend / p.close_price * 100, 2) AS yield_pct
+FROM stock_actions a
+LEFT JOIN LATERAL (
+    SELECT close_price FROM stock_prices
+    WHERE symbol = a.symbol AND trade_date < a.ex_date
+    ORDER BY trade_date DESC LIMIT 1
+) p ON TRUE
+ORDER BY a.symbol, a.ex_date;
+
+-- 23. 單日漲跌超過 10%（台股 2015-06-01 起漲跌幅上限為 10%）：超過代表資料錯誤，或除權息 / 股本變動未調整。
+--     除權息日的漲跌以「收盤 ÷（前日收盤 − 現金股利）」計算。
+--     已知例外：2317.TW 2018-10-26（減資後恢復交易，-10.48%）。推測為減資同時退還股款，
+--     Yahoo 只換算了股數比例、未計入退還的現金；回測中跨過這天的交易報酬會略為低估。除此之外應回傳 0 列
+SELECT symbol, trade_date, prev_close, cash_dividend, close_price,
+       ROUND((close_price / (prev_close - COALESCE(cash_dividend, 0)) - 1) * 100, 2) AS change_pct
+FROM (
+    SELECT p.symbol, p.trade_date, p.close_price, a.cash_dividend,
+           LAG(p.close_price) OVER (PARTITION BY p.symbol ORDER BY p.trade_date) AS prev_close
+    FROM stock_prices p
+    LEFT JOIN stock_actions a ON a.symbol = p.symbol AND a.ex_date = p.trade_date
+) t
+WHERE prev_close IS NOT NULL
+  AND ABS(close_price / (prev_close - COALESCE(cash_dividend, 0)) - 1) > 0.1005
+ORDER BY symbol, trade_date;
+
+-- 24. 回測交易獨立驗算（持有 N 日）：以 SQL 從日 K 與除權息事件重新計算每筆交易，與 backtest_trades 比對；應回傳 0 列
+--     進場 = 訊號日的下一個交易日開盤；出場 = 含進場日第 N 個交易日收盤；
+--     股利 = 除息日在（進場日, 出場日]；成本 = 手續費 0.1425% × 2 + 證交稅（股票 0.3%、ETF 0.1%）
+WITH days AS (
+    SELECT symbol, trade_date, open_price, close_price,
+           ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY trade_date) AS n
+    FROM stock_prices
+), calc AS (
+    SELECT t.id, t.strategy, t.symbol, t.exit_rule, t.entry_date, t.net_return,
+           e.trade_date AS entry_expected, e.open_price AS entry_price,
+           x.trade_date AS exit_expected, x.close_price AS exit_price,
+           COALESCE((SELECT SUM(cash_dividend) FROM stock_actions a
+                     WHERE a.symbol = t.symbol AND a.ex_date > e.trade_date AND a.ex_date <= x.trade_date), 0) AS dividends,
+           CASE WHEN t.symbol LIKE '00%' THEN 0.001 ELSE 0.003 END AS tax
+    FROM backtest_trades t
+    JOIN days s ON s.symbol = t.symbol AND s.trade_date = t.signal_date
+    JOIN days e ON e.symbol = t.symbol AND e.n = s.n + 1
+    JOIN days x ON x.symbol = t.symbol AND x.n = e.n + CAST(SUBSTRING(t.exit_rule FROM 6) AS INT) - 1
+    WHERE t.exit_rule LIKE 'hold_%' AND t.exit_date IS NOT NULL
+)
+SELECT *, ROUND((exit_price * (1 - 0.001425 - tax) + dividends) / (entry_price * 1.001425) - 1, 6) AS expected_return
+FROM calc
+WHERE entry_date <> entry_expected
+   OR ABS(net_return - ((exit_price * (1 - 0.001425 - tax) + dividends) / (entry_price * 1.001425) - 1)) > 0.000001;
+
+-- 25. 回測不重疊持有：同一（策略, 股票, 出場規則）的每筆交易，進場日都應晚於前一筆的出場日；應回傳 0 列
+SELECT strategy, symbol, exit_rule, entry_date, prev_exit
+FROM (
+    SELECT strategy, symbol, exit_rule, entry_date,
+           LAG(exit_date) OVER (PARTITION BY strategy, symbol, exit_rule ORDER BY entry_date) AS prev_exit
+    FROM backtest_trades
+) t
+WHERE prev_exit IS NOT NULL AND entry_date <= prev_exit;

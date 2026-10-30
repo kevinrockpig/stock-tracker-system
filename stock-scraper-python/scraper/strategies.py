@@ -13,6 +13,10 @@ STRATEGIES = {
     "break_ma20": "突破 20 日均線",
 }
 
+# 狀態型策略：條件成立期間每天都符合（例如多頭排列可連續數十天）；回測只把「進入狀態的第一天」當作進場訊號。
+# 其餘為事件型（交叉、突破），只在發生當天成立
+STATE_STRATEGIES = {"ma_bullish"}
+
 INPUT_COLUMNS = ("close_price", "ma5", "ma10", "ma20", "ma60", "macd_dif", "macd_signal")
 
 

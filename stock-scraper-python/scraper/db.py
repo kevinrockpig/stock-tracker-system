@@ -3,9 +3,12 @@
 資料表（皆由本服務建立與寫入，Java API 只讀取）：
   stocks            股票基本資料，一檔一筆
   stock_prices      日 K（OHLCV），同一股票同一交易日只保留一筆
+  stock_actions     除權息與股本事件（現金股利、配股 / 減資 / 分割），供回測計算還原報酬
   stock_indicators  技術指標，與 stock_prices 一對一
   strategy_signals  策略訊號，只存「某股票某交易日符合某策略」的組合
-  official_daily_quotes       證交所 / 櫃買中心開放資料的原始日成交資訊（每日累積，與上面四張表獨立）
+  backtest_trades   策略回測的每筆交易（見 backtest.py）
+  backtest_stats    策略回測統計：每個（策略, 股票或全部, 出場規則）一筆
+  official_daily_quotes       證交所 / 櫃買中心開放資料的原始日成交資訊（每日累積，與上面幾張表獨立）
   official_corporate_actions  證交所 / 櫃買中心的除權除息預告（每日累積）
 """
 
@@ -20,6 +23,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Identity,
     Index,
+    Integer,
     MetaData,
     Numeric,
     String,
@@ -45,6 +49,8 @@ stocks = Table(
     Column("symbol", String(20), primary_key=True),
     Column("name", String(100), nullable=False),
     Column("currency", String(10)),
+    # 資料庫中完整歷史的起始設定（最近一次完整重抓時的 config.HISTORY_START）；NULL 表示尚未補齊歷史
+    Column("history_from", Date),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )
@@ -67,12 +73,30 @@ stock_prices = Table(
 
 PRICE_COLUMNS = ("open_price", "high_price", "low_price", "close_price", "volume")
 
+# 除權息與股本事件（yfinance）：同一股票同一除權息日一筆，現金股利與股數變動可能同一天發生。
+# Yahoo 會把配股、減資、分割之前的價格與股利一併等比例調整，因此這裡的金額與 stock_prices 的價格基準一致
+stock_actions = Table(
+    "stock_actions",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("symbol", String(20), ForeignKey("stocks.symbol"), nullable=False),
+    Column("ex_date", Date, nullable=False),
+    Column("cash_dividend", Numeric(14, 6)),  # 每股現金股利
+    Column("split_ratio", Numeric(14, 6)),  # 新股數 / 舊股數：配股 1.1 = 每股配 0.1 股、減資 0.8、1 拆 4 = 4
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("symbol", "ex_date", name="uq_stock_actions_symbol_ex_date"),
+)
+
+ACTION_COLUMNS = ("cash_dividend", "split_ratio")
+
 # 技術指標欄位（由 indicators.compute_indicators 產生）
 INDICATOR_COLUMNS = (
     "ma5", "ma10", "ma20", "ma60",
     "macd_dif", "macd_signal", "macd_osc",
     "rsi6", "rsi12",
     "kd_k", "kd_d",
+    "atr14",
 )
 
 # 技術指標：與 stock_prices 一對一，暖身期或資料不足時為 NULL
@@ -113,6 +137,58 @@ strategy_signals = Table(
     ),
     # 供「某策略在某日符合的股票」查詢使用
     Index("ix_strategy_signals_strategy_date", "strategy", "trade_date"),
+)
+
+
+# 策略回測的每筆交易：同一（策略, 股票, 出場規則）以進場日識別；每天依最新資料重算並同步
+backtest_trades = Table(
+    "backtest_trades",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("strategy", String(30), nullable=False),
+    Column("symbol", String(20), ForeignKey("stocks.symbol"), nullable=False),
+    Column("exit_rule", String(20), nullable=False),
+    Column("signal_date", Date, nullable=False),
+    Column("entry_date", Date, nullable=False),
+    Column("entry_price", Numeric(12, 4), nullable=False),
+    Column("exit_date", Date),  # NULL：仍持有中
+    Column("exit_price", Numeric(12, 4)),
+    Column("exit_reason", String(10)),  # hold：持有期滿 / trailing：移動停利 / max_hold：移動停利達最長天數
+    Column("dividends", Numeric(12, 4), nullable=False),  # 持有期間領到的每股現金股利
+    Column("holding_days", Integer, nullable=False),  # 持有的交易日數（含進場日與出場日）
+    Column("net_return", Numeric(12, 6)),  # 扣成本、含股利的報酬率（0.05 = 5%）；持有中為 NULL
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("strategy", "symbol", "exit_rule", "entry_date", name="uq_backtest_trades_key"),
+)
+
+TRADE_VALUE_COLUMNS = (
+    "signal_date", "entry_price", "exit_date", "exit_price", "exit_reason", "dividends", "holding_days", "net_return",
+)
+
+# 策略回測統計：scope 為股票代號，或 ALL（觀察名單全部合併）。比率皆為小數（0.55 = 55%）
+STAT_VALUE_COLUMNS = (
+    "period_start", "period_end", "trades", "open_trades", "wins",
+    "win_rate", "win_rate_low", "win_rate_high",
+    "avg_return", "median_return", "avg_win", "avg_loss", "payoff_ratio", "profit_factor",
+    "max_loss", "max_consecutive_losses", "avg_holding_days",
+    "baseline_trades", "baseline_avg_return", "baseline_win_rate", "buy_hold_return",
+)
+_INTEGER_STATS = {"trades", "open_trades", "wins", "max_consecutive_losses", "baseline_trades"}
+backtest_stats = Table(
+    "backtest_stats",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("strategy", String(30), nullable=False),
+    Column("scope", String(20), nullable=False),
+    Column("exit_rule", String(20), nullable=False),
+    *(
+        Column(name, Date) if name.startswith("period_")
+        else Column(name, Integer, nullable=False) if name in _INTEGER_STATS
+        else Column(name, Numeric(12, 6))
+        for name in STAT_VALUE_COLUMNS
+    ),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("strategy", "scope", "exit_rule", name="uq_backtest_stats_key"),
 )
 
 
@@ -176,19 +252,30 @@ class SchemaMismatchError(RuntimeError):
     """資料庫中已存在結構不同的同名資料表。"""
 
 
-def init_schema(engine: Engine) -> None:
-    """建立資料表（已存在則略過），並檢查既有資料表欄位是否一致。"""
+def init_schema(engine: Engine) -> list[str]:
+    """建立資料表（已存在則略過），並補上新版程式新增的欄位，回傳補上的欄位（「資料表.欄位」）。
+
+    新增的欄位若允許 NULL，直接 ALTER TABLE ADD COLUMN，既有資料該欄為 NULL；
+    不允許 NULL 的欄位無法自動補上（既有資料沒有值），視為結構不一致。
+    """
     metadata.create_all(engine)
 
     inspector = inspect(engine)
-    for table in (stocks, stock_prices, stock_indicators, strategy_signals, official_daily_quotes, official_corporate_actions):
-        actual = {col["name"] for col in inspector.get_columns(table.name)}
-        missing = {col.name for col in table.columns} - actual
-        if missing:
-            raise SchemaMismatchError(
-                f"資料表 {table.name} 已存在但缺少欄位 {sorted(missing)}，"
-                "可能是舊版程式建立的；確認資料可捨棄後請先 DROP 該表再重新執行"
-            )
+    added = []
+    with engine.begin() as conn:
+        for table in metadata.sorted_tables:
+            actual = {col["name"] for col in inspector.get_columns(table.name)}
+            missing = [col for col in table.columns if col.name not in actual]
+            if required := sorted(col.name for col in missing if not col.nullable):
+                raise SchemaMismatchError(
+                    f"資料表 {table.name} 已存在但缺少必填欄位 {required}，"
+                    "可能是舊版程式建立的；確認資料可捨棄後請先 DROP 該表再重新執行"
+                )
+            for col in missing:
+                col_type = col.type.compile(dialect=engine.dialect)
+                conn.execute(text(f'ALTER TABLE {table.name} ADD COLUMN IF NOT EXISTS {col.name} {col_type}'))
+                added.append(f"{table.name}.{col.name}")
+    return added
 
 
 def upsert_stock(conn: Connection, symbol: str, name: str, currency: str | None) -> None:
@@ -225,21 +312,46 @@ def upsert_indicators(conn: Connection, rows: list[dict]) -> dict[str, int]:
     return _upsert(conn, stock_indicators, rows, "uq_stock_indicators_symbol_trade_date", INDICATOR_COLUMNS)
 
 
-def upsert_official_quotes(conn: Connection, rows: list[dict], chunk_size: int = 1000) -> dict[str, int]:
+def upsert_actions(conn: Connection, rows: list[dict]) -> dict[str, int]:
+    """寫入除權息與股本事件，回傳新增 / 更新 / 未變動筆數（Yahoo 重新調整金額時會更新）。"""
+    return _upsert(conn, stock_actions, rows, "uq_stock_actions_symbol_ex_date", ACTION_COLUMNS)
+
+
+def get_history_from(conn: Connection, symbol: str):
+    """資料庫中這檔股票完整歷史的起始設定；尚未補齊（或股票不存在）時為 None。"""
+    return conn.execute(select(stocks.c.history_from).where(stocks.c.symbol == symbol)).scalar()
+
+
+def mark_history_complete(conn: Connection, symbol: str, history_from) -> None:
+    conn.execute(stocks.update().where(stocks.c.symbol == symbol).values(history_from=history_from))
+
+
+def overlap_start(conn: Connection, symbol: str, days: int):
+    """資料庫中這檔股票倒數第 days 個交易日（增量抓取的起始日）；資料不足時為最早的一天，沒有資料時為 None。"""
+    recent = (
+        select(stock_prices.c.trade_date)
+        .where(stock_prices.c.symbol == symbol)
+        .order_by(stock_prices.c.trade_date.desc())
+        .limit(days)
+        .subquery()
+    )
+    return conn.execute(select(func.min(recent.c.trade_date))).scalar()
+
+
+def load_closes(conn: Connection, symbol: str, dates) -> dict:
+    """指定日期在資料庫中的收盤價（日期 → Decimal），用來偵測 Yahoo 是否重新調整了歷史價格。"""
+    stmt = select(stock_prices.c.trade_date, stock_prices.c.close_price).where(
+        stock_prices.c.symbol == symbol, stock_prices.c.trade_date.in_(list(dates))
+    )
+    return {row.trade_date: row.close_price for row in conn.execute(stmt)}
+
+
+def upsert_official_quotes(conn: Connection, rows: list[dict]) -> dict[str, int]:
     """寫入官方日成交資訊，回傳新增 / 更新 / 未變動筆數。
 
     source 不列入比較：證交所 CSV 與 OpenAPI 的同一天資料內容相同，不會因來源不同而反覆更新。
-    分批寫入，避免單一 SQL 參數過多（PostgreSQL 上限 65,535 個）。
     """
-    totals = {"inserted": 0, "updated": 0, "unchanged": 0}
-    for start in range(0, len(rows), chunk_size):
-        counts = _upsert(
-            conn, official_daily_quotes, rows[start:start + chunk_size],
-            "uq_official_daily_quotes_market_code_date", OFFICIAL_VALUE_COLUMNS,
-        )
-        for key in totals:
-            totals[key] += counts[key]
-    return totals
+    return _upsert(conn, official_daily_quotes, rows, "uq_official_daily_quotes_market_code_date", OFFICIAL_VALUE_COLUMNS)
 
 
 def upsert_corporate_actions(conn: Connection, rows: list[dict]) -> dict[str, int]:
@@ -319,28 +431,82 @@ def sync_signals(conn: Connection, symbol: str, signals: set[tuple]) -> dict[str
     return {"inserted": len(to_insert), "deleted": len(to_delete), "unchanged": len(signals & existing)}
 
 
-def _upsert(conn: Connection, table: Table, rows: list[dict], constraint: str, value_columns: tuple[str, ...]) -> dict[str, int]:
-    """以 (symbol, trade_date) 為鍵寫入。
+def load_backtest_inputs(conn: Connection, symbol: str) -> tuple[pd.DataFrame, dict, dict]:
+    """回測輸入：（日 K + ATR / MA60 / MACD 訊號線, 策略 → 訊號日期集合, 除息日 → 現金股利）。"""
+    bars = select(
+        stock_prices.c.trade_date, stock_prices.c.open_price, stock_prices.c.close_price,
+        stock_indicators.c.atr14, stock_indicators.c.ma60, stock_indicators.c.macd_signal,
+    ).join(
+        stock_indicators,
+        (stock_indicators.c.symbol == stock_prices.c.symbol) & (stock_indicators.c.trade_date == stock_prices.c.trade_date),
+    ).where(stock_prices.c.symbol == symbol).order_by(stock_prices.c.trade_date)
+    frame = pd.DataFrame(conn.execute(bars).mappings().all())
+
+    signals = {}
+    for row in conn.execute(select(strategy_signals.c.strategy, strategy_signals.c.trade_date).where(strategy_signals.c.symbol == symbol)):
+        signals.setdefault(row.strategy, set()).add(row.trade_date)
+
+    dividends = {
+        row.ex_date: row.cash_dividend
+        for row in conn.execute(
+            select(stock_actions.c.ex_date, stock_actions.c.cash_dividend)
+            .where(stock_actions.c.symbol == symbol, stock_actions.c.cash_dividend.is_not(None))
+        )
+    }
+    return frame, signals, dividends
+
+
+def sync_backtest_trades(conn: Connection, symbol: str, rows: list[dict]) -> dict[str, int]:
+    """讓資料庫中這檔股票的回測交易與本次計算一致：寫入新增 / 變動的，刪除不再出現的。"""
+    counts = _upsert(conn, backtest_trades, rows, "uq_backtest_trades_key", TRADE_VALUE_COLUMNS)
+    keep = {(r["strategy"], r["exit_rule"], r["entry_date"]) for r in rows}
+    existing = conn.execute(
+        select(backtest_trades.c.id, backtest_trades.c.strategy, backtest_trades.c.exit_rule, backtest_trades.c.entry_date)
+        .where(backtest_trades.c.symbol == symbol)
+    ).all()
+    stale = [row.id for row in existing if (row.strategy, row.exit_rule, row.entry_date) not in keep]
+    if stale:
+        conn.execute(backtest_trades.delete().where(backtest_trades.c.id.in_(stale)))
+    return {**counts, "deleted": len(stale)}
+
+
+def sync_backtest_stats(conn: Connection, rows: list[dict]) -> dict[str, int]:
+    """寫入回測統計，並刪除不再出現的組合（例如移除了某個策略或股票）。"""
+    counts = _upsert(conn, backtest_stats, rows, "uq_backtest_stats_key", STAT_VALUE_COLUMNS)
+    keep = {(r["strategy"], r["scope"], r["exit_rule"]) for r in rows}
+    existing = conn.execute(select(backtest_stats.c.id, backtest_stats.c.strategy, backtest_stats.c.scope, backtest_stats.c.exit_rule)).all()
+    stale = [row.id for row in existing if (row.strategy, row.scope, row.exit_rule) not in keep]
+    if stale:
+        conn.execute(backtest_stats.delete().where(backtest_stats.c.id.in_(stale)))
+    return {**counts, "deleted": len(stale)}
+
+
+def _upsert(
+    conn: Connection, table: Table, rows: list[dict], constraint: str, value_columns: tuple[str, ...], chunk_size: int = 1000
+) -> dict[str, int]:
+    """依唯一鍵（constraint）寫入，回傳新增 / 更新 / 未變動筆數。
 
     - 已存在 → 只有數值不同時才更新
     - 數值完全相同 → 不動，重複執行不會產生重複資料
+    - 分批寫入，避免單一 SQL 參數過多（PostgreSQL 上限 65,535 個；例如十年日 K 的指標約 3 萬個參數）
     """
-    if not rows:
-        return {"inserted": 0, "updated": 0, "unchanged": 0}
+    totals = {"inserted": 0, "updated": 0, "unchanged": 0}
+    for start in range(0, len(rows), chunk_size):
+        chunk = rows[start:start + chunk_size]
+        stmt = pg_insert(table).values(chunk)
+        current = tuple_(*(table.c[name] for name in value_columns))
+        incoming = tuple_(*(stmt.excluded[name] for name in value_columns))
+        stmt = stmt.on_conflict_do_update(
+            constraint=constraint,
+            set_={**{name: stmt.excluded[name] for name in value_columns}, "updated_at": func.now()},
+            where=current.is_distinct_from(incoming),
+        ).returning(
+            # PostgreSQL 慣用技巧：新插入的列 xmax = 0，被 UPDATE 的列 xmax <> 0
+            literal_column("(xmax = 0)").label("inserted")
+        )
 
-    stmt = pg_insert(table).values(rows)
-    current = tuple_(*(table.c[name] for name in value_columns))
-    incoming = tuple_(*(stmt.excluded[name] for name in value_columns))
-    stmt = stmt.on_conflict_do_update(
-        constraint=constraint,
-        set_={**{name: stmt.excluded[name] for name in value_columns}, "updated_at": func.now()},
-        where=current.is_distinct_from(incoming),
-    ).returning(
-        # PostgreSQL 慣用技巧：新插入的列 xmax = 0，被 UPDATE 的列 xmax <> 0
-        literal_column("(xmax = 0)").label("inserted")
-    )
-
-    flags = [row.inserted for row in conn.execute(stmt)]
-    inserted = sum(flags)
-    updated = len(flags) - inserted
-    return {"inserted": inserted, "updated": updated, "unchanged": len(rows) - len(flags)}
+        flags = [row.inserted for row in conn.execute(stmt)]
+        totals["inserted"] += sum(flags)
+        totals["updated"] += len(flags) - sum(flags)
+        totals["unchanged"] += len(chunk) - len(flags)
+    return totals

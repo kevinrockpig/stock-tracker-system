@@ -1,7 +1,11 @@
-"""執行入口：python -m scraper.main [--period 2y]（每日排程見 scripts/run_daily.sh）
+"""執行入口：python -m scraper.main [--full]（每日排程見 scripts/run_daily.sh）
 
-每檔股票在同一個交易（transaction）中完成：
-寫入日 K → 從資料庫讀回全部日 K 計算技術指標 → 依指標掃描策略並同步策略訊號。
+每檔股票：
+1. 增量抓取：從資料庫最新的日期接著抓（往前重疊 OVERLAP_TRADING_DAYS 個交易日）；
+   資料庫還沒有 HISTORY_START 起的完整歷史，或 Yahoo 重新調整了歷史價格時，改抓完整歷史
+2. 在同一個交易（transaction）中：寫入日 K 與除權息事件 → 從資料庫讀回全部日 K 計算技術指標
+   → 依指標掃描策略並同步策略訊號
+3. 全部股票完成後，依最新訊號重新計算策略回測（scraper/backtest.py）
 """
 
 import argparse
@@ -11,26 +15,66 @@ import sys
 from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 
-from scraper.config import DEFAULT_PERIOD, WATCHLIST, ConfigError, build_database_url, env_file_permission_warning
+from scraper.backtest import log_summary, run_backtest
+from scraper.config import (
+    HISTORY_START,
+    OVERLAP_TRADING_DAYS,
+    WATCHLIST,
+    ConfigError,
+    build_database_url,
+    env_file_permission_warning,
+)
 from scraper.db import (
     SchemaMismatchError,
     delete_placeholder_rows,
+    get_history_from,
     init_schema,
+    load_closes,
     load_prices,
     load_strategy_inputs,
+    mark_history_complete,
+    overlap_start,
     sync_signals,
+    upsert_actions,
     upsert_indicators,
     upsert_prices,
     upsert_stock,
 )
-from scraper.fetcher import FetchError, fetch_daily_prices, to_records
+from scraper.fetcher import (
+    READJUST_CHECK_DAYS,
+    FetchError,
+    FetchResult,
+    detect_readjustment,
+    fetch_daily_prices,
+    to_action_records,
+    to_records,
+)
 from scraper.indicators import compute_indicators, to_indicator_records
 from scraper.strategies import STRATEGIES, evaluate_strategies, to_signal_set
 
 logger = logging.getLogger("scraper")
 
 
-def run(period: str) -> int:
+def fetch_with_history(engine, symbol: str, force_full: bool) -> tuple[FetchResult, bool]:
+    """增量抓日 K；需要時改抓 HISTORY_START 起的完整歷史。回傳（結果, 是否為完整歷史）。"""
+    with engine.connect() as conn:
+        history_from = get_history_from(conn, symbol)
+        start = overlap_start(conn, symbol, OVERLAP_TRADING_DAYS)
+    if force_full or history_from is None or history_from > HISTORY_START or start is None:
+        if not force_full:
+            logger.info("[%s] 資料庫尚未有 %s 起的完整歷史，改抓完整歷史", symbol, HISTORY_START)
+        return fetch_daily_prices(symbol, start=HISTORY_START), True
+
+    result = fetch_daily_prices(symbol, start=start)
+    with engine.connect() as conn:
+        stored = load_closes(conn, symbol, result.prices["trade_date"].head(READJUST_CHECK_DAYS))
+    if reason := detect_readjustment(result.prices, stored):
+        logger.warning("[%s] %s，改抓 %s 起的完整歷史", symbol, reason, HISTORY_START)
+        return fetch_daily_prices(symbol, start=HISTORY_START), True
+    return result, False
+
+
+def run(force_full: bool = False) -> int:
     if warning := env_file_permission_warning():
         logger.warning(warning)
 
@@ -44,7 +88,7 @@ def run(period: str) -> int:
     engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 15})
 
     try:
-        init_schema(engine)
+        added = init_schema(engine)
     except SchemaMismatchError as exc:
         logger.error("資料表結構不一致：%s", exc)
         return 3
@@ -52,18 +96,24 @@ def run(period: str) -> int:
         logger.error("資料庫連線或建表失敗：%s", exc.__class__.__name__)
         logger.error("%s", getattr(exc, "orig", exc))
         return 3
-    logger.info("資料表檢查完成：stocks, stock_prices, stock_indicators, strategy_signals")
+    if added:
+        logger.info("已補上新版新增的欄位：%s", "、".join(added))
+    logger.info("資料表檢查完成：stocks, stock_prices, stock_actions, stock_indicators, strategy_signals")
 
     failed = []
     dates_by_symbol = {}
     latest_signals = {}  # symbol → (最新交易日, 當天符合的策略)
     for symbol, name in WATCHLIST.items():
         try:
-            df, currency = fetch_daily_prices(symbol, period)
+            result, full = fetch_with_history(engine, symbol, force_full)
+            df, currency = result.prices, result.currency
             with engine.begin() as conn:
                 upsert_stock(conn, symbol, name, currency)
                 removed = delete_placeholder_rows(conn, symbol)
                 counts = upsert_prices(conn, to_records(symbol, df))
+                action_counts = upsert_actions(conn, to_action_records(symbol, result.actions))
+                if full:
+                    mark_history_complete(conn, symbol, HISTORY_START)
                 # 以資料庫中的完整日 K 計算，確保指標與 stock_prices 的日期逐筆對應
                 indicators = compute_indicators(load_prices(conn, symbol))
                 indicator_counts = upsert_indicators(conn, to_indicator_records(symbol, indicators))
@@ -87,11 +137,16 @@ def run(period: str) -> int:
         dates_by_symbol[symbol] = set(indicators["trade_date"])
         latest = df.iloc[-1]
         logger.info(
-            "[%s %s] %d 筆（%s ~ %s）新增 %d / 更新 %d / 未變動 %d / 刪除補值 %d；最新收盤 %s %s @ %s",
-            symbol, name, len(df), df["trade_date"].iloc[0], latest["trade_date"],
+            "[%s %s] %s%d 筆（%s ~ %s）新增 %d / 更新 %d / 未變動 %d / 刪除補值 %d；最新收盤 %s %s @ %s",
+            symbol, name, "完整歷史 " if full else "", len(df), df["trade_date"].iloc[0], latest["trade_date"],
             counts["inserted"], counts["updated"], counts["unchanged"], removed,
             latest["close_price"], currency or "", latest["trade_date"],
         )
+        if action_counts["inserted"] or action_counts["updated"]:
+            logger.info(
+                "[%s] 除權息事件 %d 筆 新增 %d / 更新 %d",
+                symbol, len(result.actions), action_counts["inserted"], action_counts["updated"],
+            )
         last = indicators.iloc[-1]
         logger.info(
             "[%s] 指標 %d 筆 新增 %d / 更新 %d / 未變動 %d；%s MA5 %.2f MA20 %.2f DIF %.2f MACD %.2f RSI6 %.2f K %.2f D %.2f",
@@ -109,8 +164,14 @@ def run(period: str) -> int:
 
     warn_missing_dates(dates_by_symbol)
     log_strategy_summary(latest_signals)
+    try:
+        log_summary(run_backtest(engine, WATCHLIST))
+    except Exception:
+        logger.exception("策略回測失敗（日 K、指標與訊號已寫入，不受影響）")
+        failed.append("回測")
     engine.dispose()
-    logger.info("完成：成功 %d 檔，失敗 %d 檔 %s", len(WATCHLIST) - len(failed), len(failed), failed or "")
+    failed_symbols = [s for s in failed if s in WATCHLIST]
+    logger.info("完成：成功 %d 檔，失敗 %d 檔 %s", len(WATCHLIST) - len(failed_symbols), len(failed_symbols), failed or "")
     return 1 if failed else 0
 
 
@@ -156,11 +217,11 @@ def log_strategy_summary(latest_signals: dict[str, tuple]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="擷取觀察名單日行情並寫入 PostgreSQL")
-    parser.add_argument("--period", default=DEFAULT_PERIOD, help=f"yfinance 期間，例如 5d、1mo、1y、2y（預設 {DEFAULT_PERIOD}）")
+    parser.add_argument("--full", action="store_true", help=f"強制重抓 {HISTORY_START} 起的完整歷史（平常不需要，程式會自動判斷）")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
-    sys.exit(run(args.period))
+    sys.exit(run(args.full))
 
 
 if __name__ == "__main__":

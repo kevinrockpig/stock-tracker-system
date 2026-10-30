@@ -2,6 +2,7 @@
 
 import logging
 import os
+from datetime import date
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
@@ -24,10 +25,16 @@ WATCHLIST: dict[str, str] = {
     "0050.TW": "元大台灣50",
 }
 
-# 每次重抓兩年：前一年作為 MACD / RSI / KD 的暖身資料（見 indicators.WARMUP_BARS），
-# 讓圖表顯示的最近一年指標與券商軟體一致；也會自動補上先前 yfinance 漏掉的交易日
-# 數值沒變的資料不會被更新，重複抓取的成本很低
-DEFAULT_PERIOD = "2y"
+# 增量抓取：資料已存在自己的資料庫，每次只從資料庫最新的日期接著抓，並往前重疊這麼多個交易日：
+# - 比對重疊日期的收盤價，偵測 Yahoo 是否因配股、減資、分割重新調整了歷史價格（見 fetcher.detect_readjustment）
+# - 接收 Yahoo 對最近幾天的修正（例如成交量事後更正）
+# 以交易日而非日曆天計算，連假（例如春節休市 9 天）也一定有重疊；電腦關機多久，下次執行就從那裡接著補
+OVERLAP_TRADING_DAYS = 10
+
+# 完整歷史的起始日（供回測使用）：台股漲跌幅自 2015-06-01 由 7% 放寬為 10%，從這天起市場規則一致。
+# 資料庫尚未有這天起的資料（例如新加入觀察名單），或 Yahoo 因配股、減資、分割重新調整了歷史價格時，
+# 會自動改抓這天起的完整歷史（見 main.py）
+HISTORY_START = date(2015, 6, 1)
 
 # JDBC 與 libpq（psycopg）的連線參數名稱不同，只轉換已知的參數
 _QUERY_PARAM_MAP = {
