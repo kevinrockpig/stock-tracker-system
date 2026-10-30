@@ -1,6 +1,7 @@
 """策略回測單元測試：python -m pytest（以手工資料驗證每條規則，不連線資料庫）"""
 
 import math
+import statistics
 from datetime import date, timedelta
 
 import pytest
@@ -25,6 +26,7 @@ from scraper.backtest import (
     in_market_days,
     net_return,
     rules_for,
+    clustered_interval,
     run_strategy,
     simulate,
     summarize,
@@ -186,8 +188,9 @@ def test_excess_return_compares_with_same_stock_baseline():
 
 
 def test_has_edge_only_when_interval_above_zero():
-    steady = [closed_trade(0.03 + 0.001 * (i % 3), i) for i in range(30)]  # 穩定比基準高約 3%
-    noisy = [closed_trade(0.30 if i % 2 else -0.27, i) for i in range(30)]  # 平均也略高，但波動很大
+    # 每筆間隔 31 天，分散在不同月份（區間依進場月份分群計算）
+    steady = [closed_trade(0.03 + 0.001 * (i % 3), i * 31) for i in range(30)]  # 穩定比基準高約 3%
+    noisy = [closed_trade(0.30 if i % 2 else -0.27, i * 31) for i in range(30)]  # 平均也略高，但波動很大
     baseline = {"A": base(0.0, 0.0)}
     edge = summarize({"A": steady}, baseline)
     assert edge["has_edge"] and edge["excess_low"] > 0
@@ -197,12 +200,12 @@ def test_has_edge_only_when_interval_above_zero():
 
 
 def test_robustness_requires_both_halves_above_baseline():
-    split = DAY0 + timedelta(days=30)
-    # 前半段基準 0%、後半段基準 +5%（例如後半段是大多頭）
-    baseline = {"A": base(0.0, day=0) + base(0.05, day=40)}
-    early = [closed_trade(0.03 + 0.001 * (i % 3), i) for i in range(30)]  # 前半段，比同期基準高 3%
-    late_good = [closed_trade(0.08 + 0.001 * (i % 3), 40 + i) for i in range(30)]  # 後半段，比同期基準高 3%
-    late_bad = [closed_trade(0.04 + 0.001 * (i % 3), 40 + i) for i in range(30)]  # 後半段，比同期基準低 1%
+    split = DAY0 + timedelta(days=1000)
+    # 前半段基準 0%、後半段基準 +5%（例如後半段是大多頭）；每筆間隔 31 天，分散在不同月份
+    baseline = {"A": base(0.0, day=0) + base(0.05, day=1000)}
+    early = [closed_trade(0.03 + 0.001 * (i % 3), i * 31) for i in range(30)]  # 前半段，比同期基準高 3%
+    late_good = [closed_trade(0.08 + 0.001 * (i % 3), 1000 + i * 31) for i in range(30)]  # 後半段，比同期基準高 3%
+    late_bad = [closed_trade(0.04 + 0.001 * (i % 3), 1000 + i * 31) for i in range(30)]  # 後半段，比同期基準低 1%
 
     good = summarize({"A": early + late_good}, baseline, split)
     assert good["trades_first"] == 30 and good["trades_second"] == 30
@@ -295,3 +298,25 @@ def test_simulate_records_stratum_only_for_ma60_exit():
     assert simulate(b, 0, EXIT_RULES["ma60_exit"]).stratum is True  # 訊號日收盤 11 > 季線 10.5
     assert simulate(b, 4, EXIT_RULES["ma60_exit"]).stratum is False  # 訊號日收盤 9.5 < 季線 10
     assert simulate(b, 0, EXIT_RULES["hold_5"]).stratum is None
+
+
+def test_clustered_interval_equals_t_interval_when_each_trade_is_its_own_cluster():
+    values = [0.03, -0.01, 0.02, 0.05, -0.02, 0.01]
+    low, high, groups = clustered_interval(values, list(range(len(values))))
+    half = t_critical(len(values) - 1) * statistics.stdev(values) / math.sqrt(len(values))
+    assert groups == 6
+    assert low == pytest.approx(statistics.fmean(values) - half) and high == pytest.approx(statistics.fmean(values) + half)
+
+
+def test_duplicated_trades_in_same_month_do_not_narrow_the_interval():
+    # 同一個月 3 檔股票走勢相同（報酬完全一樣）：資訊量等於 1 筆，區間不應因此變窄
+    values = [0.03, -0.01, 0.02, 0.05, -0.02]
+    single = clustered_interval(values, list(range(5)))
+    tripled = clustered_interval([v for v in values for _ in range(3)], [m for m in range(5) for _ in range(3)])
+    assert tripled[0] == pytest.approx(single[0]) and tripled[1] == pytest.approx(single[1])
+    naive_half = t_critical(14) * statistics.stdev(values * 3) / math.sqrt(15)
+    assert tripled[1] - tripled[0] > 2 * naive_half  # 若當成 15 筆獨立樣本，區間會窄很多
+
+
+def test_too_few_months_gives_no_interval():
+    assert clustered_interval([0.01, 0.02, 0.03], [1, 1, 2])[:2] == (None, None)

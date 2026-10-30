@@ -22,7 +22,9 @@
   並與同期間買進持有比較。合併範圍為各股票各分配等額資金（不再平衡）的平均資金曲線
 - 基準：同一檔股票「任意一個交易日」都依相同規則進場的平均結果（可重疊）。
   超額報酬 = 每筆交易報酬 − 同一檔股票的基準平均。「有優勢」（has_edge）需同時符合：
-  1. 超額報酬的 95% 信賴區間下限 > 0
+  1. 超額報酬的 95% 信賴區間下限 > 0。區間依「進場月份」分群計算（群集穩健標準誤，自由度 = 月份數 − 1）：
+     同一個月進場的交易（不論哪一檔股票）常一起漲跌，不能當成互相獨立的樣本，否則股票越多區間越窄、越容易誤判有優勢。
+     月份數少於 MIN_CLUSTERS 時不計算區間
   2. 穩健性：回測期間以交易日中點切成前後兩段，兩段的超額報酬（各自與同一段的基準比較）都 > 0。
      真正有效的訊號在不同時期都應有效；只在某段行情有效的，多半是剛好遇到那段行情
   不同股票常同時漲跌，合併統計的樣本並非完全獨立；同時比較多組（策略 × 出場規則）也可能有組別靠運氣通過，
@@ -355,6 +357,31 @@ def t_critical(df: int) -> float:
     return z + (z**3 + z) / (4 * df) + (5 * z**5 + 16 * z**3 + 3 * z) / (96 * df**2)
 
 
+MIN_CLUSTERS = 3  # 月份數太少時 t 分布近似不準、區間也沒有意義
+
+
+def entry_month(day: date) -> tuple[int, int]:
+    return (day.year, day.month)
+
+
+def clustered_interval(values: list[float], clusters: list) -> tuple[float | None, float | None, int]:
+    """平均值的 95% 信賴區間（群集穩健標準誤）。回傳（下限, 上限, 群數）；群數少於 MIN_CLUSTERS 時區間為 None。
+
+    變異數 = G / (G − 1) × Σ_群（群內偏差總和）² / n²，自由度 G − 1。
+    每筆都在不同群時，與一般的 t 區間（樣本標準差 / √n）完全相同。
+    """
+    groups = {}
+    mean = statistics.fmean(values) if values else 0.0
+    for value, cluster in zip(values, clusters):
+        groups[cluster] = groups.get(cluster, 0.0) + (value - mean)
+    g, n = len(groups), len(values)
+    if g < MIN_CLUSTERS:
+        return None, None, g
+    variance = g / (g - 1) * sum(total * total for total in groups.values()) / (n * n)
+    half = t_critical(g - 1) * math.sqrt(variance)
+    return mean - half, mean + half, g
+
+
 def _mean_or_none(values) -> float | None:
     values = list(values)
     return statistics.fmean(values) if values else None
@@ -395,10 +422,7 @@ def summarize(trades_by_symbol: dict[str, list[Trade]], baselines: dict[str, lis
 
     bases = [trade_baseline(lookup, t, s) for t, s in closed]
     excess = [t.net_return - base[0] for (t, _), base in zip(closed, bases)]
-    excess_low = excess_high = None
-    if len(excess) >= 2:
-        half = t_critical(len(excess) - 1) * statistics.stdev(excess) / math.sqrt(len(excess))
-        excess_low, excess_high = statistics.fmean(excess) - half, statistics.fmean(excess) + half
+    excess_low, excess_high, months = clustered_interval(excess, [entry_month(t.entry_date) for t, _ in closed])
 
     all_baseline = [r for items in baselines.values() for _, r, _ in items]
     halves = split_excess(closed, baselines, split_date) if split_date else {}
@@ -434,6 +458,7 @@ def summarize(trades_by_symbol: dict[str, list[Trade]], baselines: dict[str, lis
         "excess_return": statistics.fmean(excess) if excess else None,
         "excess_low": excess_low,
         "excess_high": excess_high,
+        "excess_clusters": months,
         "split_date": split_date,
         "trades_first": halves.get("trades_first"),
         "excess_first": halves.get("excess_first"),

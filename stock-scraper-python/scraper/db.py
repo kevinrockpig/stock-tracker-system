@@ -181,13 +181,15 @@ STAT_VALUE_COLUMNS = (
     # 超額報酬 = 交易報酬 − 同一檔股票任意日進場的平均；
     # has_edge：95% 信賴區間下限 > 0，且前後兩段（以 split_date 切分）的超額報酬都 > 0
     "excess_return", "excess_low", "excess_high",
+    # 信賴區間依進場月份分群計算時的月份數（見 backtest.clustered_interval）
+    "excess_clusters",
     "split_date", "trades_first", "excess_first", "trades_second", "excess_second",
     "has_edge",
     # 資金曲線（見 backtest.py）：策略的累積報酬、年化報酬、最大回撤、在場時間比例，以及同期買進持有的年化報酬與最大回撤
     "total_return", "cagr", "max_drawdown", "exposure", "bh_cagr", "bh_max_drawdown",
 )
 _INTEGER_STATS = {"trades", "open_trades", "wins", "max_consecutive_losses", "baseline_trades"}
-_NULLABLE_INTEGER_STATS = {"trades_first", "trades_second"}  # 後來新增的欄位允許 NULL，既有資料表才能自動補上
+_NULLABLE_INTEGER_STATS = {"trades_first", "trades_second", "excess_clusters"}  # 後來新增的欄位允許 NULL，既有資料表才能自動補上
 backtest_stats = Table(
     "backtest_stats",
     metadata,
