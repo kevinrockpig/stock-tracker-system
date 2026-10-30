@@ -39,7 +39,8 @@ export DB_URL='jdbc:postgresql://<host>:5432/<db>?sslmode=require' DB_USERNAME='
 | 方法與路徑 | 說明 |
 |---|---|
 | `GET /api/stocks` | 股票清單與最新日收盤報價（含前一交易日收盤、漲跌、漲跌幅） |
-| `GET /api/stocks/{symbol}/history?from=&to=` | 歷史日 K 與當日技術指標，`from` / `to` 為 `YYYY-MM-DD`，皆可省略 |
+| `GET /api/stocks/{symbol}/history?from=&to=` | 歷史日 K 與當日技術指標（MA、MACD、RSI、KD、ATR14），`from` / `to` 為 `YYYY-MM-DD`，皆可省略 |
+| `GET /api/stocks/{symbol}/levels` | 最新的參考價位（供下一個交易日參考）：ATR 停損、60 日波段與黃金分割、參考價與漲跌停價、除權息預告；尚未計算時回 404 |
 | `GET /api/strategies` | 可用的選股策略（代碼、中文名稱、成立條件） |
 | `GET /api/screener?strategy=&days=` | 最近 `days` 個交易日（1～60，預設 1）內符合策略的股票 |
 | `GET /api/backtests?scope=` | 策略回測統計（每個策略 × 出場規則一筆）：勝率與信賴區間、平均報酬、相對任意日進場的超額報酬與區間、前後兩段、是否有優勢、買進持有；`scope` 為 `ALL`（預設，全部合併）或股票代號 |
@@ -48,6 +49,7 @@ export DB_URL='jdbc:postgresql://<host>:5432/<db>?sslmode=require' DB_USERNAME='
 ```bash
 curl http://localhost:8081/api/stocks
 curl "http://localhost:8081/api/stocks/2330.TW/history?from=2026-10-01"
+curl http://localhost:8081/api/stocks/2330.TW/levels
 curl "http://localhost:8081/api/screener?strategy=golden_cross&days=10"
 curl "http://localhost:8081/api/backtests"
 curl "http://localhost:8081/api/stocks/2330.TW/trades?strategy=golden_cross&exitRule=trailing_atr"
@@ -62,8 +64,9 @@ curl "http://localhost:8081/api/stocks/2330.TW/trades?strategy=golden_cross&exit
 ```
 src/main/java/com/ugi/stock/
 ├── controller/   StockController（/api/stocks）、StrategyController（/api/strategies、/api/screener）、
-│                 BacktestController（/api/backtests、/api/stocks/{symbol}/trades）
-├── service/      StockService、StrategyService、BacktestService、
+│                 BacktestController（/api/backtests、/api/stocks/{symbol}/trades）、
+│                 ReferenceLevelController（/api/stocks/{symbol}/levels）
+├── service/      StockService、StrategyService、BacktestService、ReferenceLevelService、
 │                 Strategy / ExitRule（策略與出場規則代碼，須與 Python 的 STRATEGIES / EXIT_RULES 一致）
 ├── repository/   Spring Data JPA 查詢
 ├── entity/       對應資料表，全部標記 @Immutable（唯讀）

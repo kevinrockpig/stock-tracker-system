@@ -99,7 +99,8 @@ public class StockService {
                 indicator.getRsi6(),
                 indicator.getRsi12(),
                 indicator.getKdK(),
-                indicator.getKdD()
+                indicator.getKdD(),
+                indicator.getAtr14()
         );
     }
 

@@ -68,4 +68,8 @@ public class StockIndicator {
 
     @Column(name = "kd_d", precision = 12, scale = 4)
     private BigDecimal kdD;
+
+    // 平均真實區間（14 日），回測移動停利與參考價位的 ATR 停損使用
+    @Column(name = "atr14", precision = 12, scale = 4)
+    private BigDecimal atr14;
 }

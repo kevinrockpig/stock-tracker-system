@@ -34,6 +34,7 @@ public record StockHistoryResponse(
     /**
      * 技術指標（由 Python 以交易日計算）。暖身期或資料不足時個別欄位為 null。
      * MACD 使用台股名稱：macdDif = DIF、macdSignal = MACD、macdOsc = OSC。
+     * atr14 為 14 日平均真實區間（價格單位），用於移動停利線：進場後最高收盤價 − 3 × ATR。
      */
     public record Indicators(
             BigDecimal ma5,
@@ -46,7 +47,8 @@ public record StockHistoryResponse(
             BigDecimal rsi6,
             BigDecimal rsi12,
             BigDecimal kdK,
-            BigDecimal kdD
+            BigDecimal kdD,
+            BigDecimal atr14
     ) {
     }
 }
