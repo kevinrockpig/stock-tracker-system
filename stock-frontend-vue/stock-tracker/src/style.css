@@ -1,3 +1,13 @@
+:root {
+  /* 固定在頂端的導覽列高度：跳到段落（#錨點）時預留這段距離，避免標題被蓋住 */
+  --nav-height: 44px;
+  --anchor-offset: calc(var(--nav-height) + 16px);
+}
+
+[id] {
+  scroll-margin-top: var(--anchor-offset);
+}
+
 body {
   margin: 0;
   background: #f4f6f9;

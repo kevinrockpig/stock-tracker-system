@@ -48,5 +48,14 @@ export const SUB_CHARTS = [
   },
 ]
 
+// 顯示區間（只調整圖表縮放，不重新呼叫 API）
+export const CHART_RANGES = [
+  { months: 1, label: '1 個月' },
+  { months: 3, label: '3 個月' },
+  { months: 6, label: '6 個月' },
+  { months: 12, label: '1 年' },
+]
+
+export const DEFAULT_MONTHS = 3
 export const DEFAULT_MA_KEYS = MA_LINES.map((ma) => ma.key)
 export const DEFAULT_SUB_CHART_KEYS = ['macd', 'rsi']

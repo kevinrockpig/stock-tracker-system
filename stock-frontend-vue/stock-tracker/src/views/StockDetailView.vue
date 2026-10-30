@@ -2,19 +2,13 @@
 import { computed, ref, watch } from 'vue'
 import { fetchHistory } from '../api/stocks.js'
 import CandlestickChart from '../components/CandlestickChart.vue'
-import { DEFAULT_MA_KEYS, DEFAULT_SUB_CHART_KEYS, MA_LINES, SUB_CHARTS } from '../utils/chartConfig.js'
+import { CHART_RANGES, MA_LINES, SUB_CHARTS } from '../utils/chartConfig.js'
+import { defaultChartSettings, loadChartSettings, saveChartSettings } from '../utils/chartSettings.js'
 import { formatChange, formatLots, formatPercent, formatPrice, isoDate, monthsBefore, trendClass } from '../utils/format.js'
 
 const props = defineProps({
   symbol: { type: String, required: true },
 })
-
-const RANGES = [
-  { months: 1, label: '1 個月' },
-  { months: 3, label: '3 個月' },
-  { months: 6, label: '6 個月' },
-  { months: 12, label: '1 年' },
-]
 
 // 一次取最近一年的日 K，切換區間只調整圖表縮放，不重新呼叫 API
 const HISTORY_MONTHS = 12
@@ -22,11 +16,24 @@ const HISTORY_MONTHS = 12
 const history = ref(null)
 const loading = ref(false)
 const error = ref('')
-const months = ref(3)
 const visibleRange = ref(null)
-// 指標顯示設定（切換時圖表維持目前區間）
-const maKeys = ref([...DEFAULT_MA_KEYS])
-const subChartKeys = ref([...DEFAULT_SUB_CHART_KEYS])
+
+// 顯示設定：沿用上次的選擇（存在瀏覽器，所有股票共用）；切換指標時圖表維持目前區間
+const saved = loadChartSettings()
+const months = ref(saved.months)
+const maKeys = ref(saved.maKeys)
+const subChartKeys = ref(saved.subChartKeys)
+
+const currentSettings = () => ({ months: months.value, maKeys: maKeys.value, subChartKeys: subChartKeys.value })
+watch([months, maKeys, subChartKeys], () => saveChartSettings(currentSettings()), { deep: true })
+
+const isDefaultSettings = computed(() => JSON.stringify(currentSettings()) === JSON.stringify(defaultChartSettings()))
+function resetSettings() {
+  const defaults = defaultChartSettings()
+  months.value = defaults.months
+  maKeys.value = defaults.maKeys
+  subChartKeys.value = defaults.subChartKeys
+}
 
 async function load() {
   loading.value = true
@@ -86,7 +93,7 @@ const changePercent = computed(() => {
         <div class="toolbar">
           <div class="ranges" role="group" aria-label="顯示區間">
             <button
-              v-for="range in RANGES"
+              v-for="range in CHART_RANGES"
               :key="range.months"
               type="button"
               :class="{ active: months === range.months }"
@@ -115,6 +122,7 @@ const changePercent = computed(() => {
               {{ sub.label }}
             </label>
           </fieldset>
+          <button v-if="!isDefaultSettings" type="button" class="reset" @click="resetSettings">恢復預設</button>
         </div>
 
         <CandlestickChart
@@ -125,9 +133,12 @@ const changePercent = computed(() => {
           @range-change="visibleRange = $event"
         />
 
+        <!-- 中文句子之間不換行：模板換行會變成一個空白 -->
         <p class="note">
-          價格未還原除息，除息日可能出現跳空缺口（股票分割已調整）。可用滑鼠滾輪縮放、拖曳下方滑桿調整區間。
-          技術指標由後端以交易日計算：MACD（12, 26, 9）、RSI（6, 12）、KD（9, 3, 3）；RSI 虛線為 30 / 70，KD 虛線為 20 / 80。
+          價格未還原除息，除息日可能出現跳空缺口（股票分割已調整）。可用滑鼠滾輪縮放、拖曳下方滑桿調整區間。區間與指標的選擇會記在這個瀏覽器，下次開啟任何個股都沿用。
+        </p>
+        <p class="note">
+          技術指標由後端以交易日計算：MACD（12, 26, 9）、RSI（6, 12）、KD（9, 3, 3）；RSI 虛線為 30 / 70，KD 虛線為 20 / 80。<RouterLink :to="{ name: 'about', hash: '#indicators' }">指標計算方式與解讀</RouterLink>
         </p>
       </template>
     </template>
@@ -221,6 +232,11 @@ const changePercent = computed(() => {
   align-items: center;
   gap: 4px;
   cursor: pointer;
+}
+
+.reset {
+  padding: 2px 10px;
+  font-size: 13px;
 }
 
 .swatch {

@@ -95,7 +95,10 @@ watch([selectedCode, selectedDays], loadResult)
           {{ strategy.name }}
         </button>
       </div>
-      <p v-if="selectedStrategy" class="description">條件：{{ selectedStrategy.description }}</p>
+      <p v-if="selectedStrategy" class="description">
+        條件：{{ selectedStrategy.description }}
+        <RouterLink :to="{ name: 'about', hash: '#strategies' }">策略說明</RouterLink>
+      </p>
 
       <div class="filter-row" role="group" aria-label="查詢區間">
         <button
