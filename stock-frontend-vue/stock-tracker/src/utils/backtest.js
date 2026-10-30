@@ -9,6 +9,7 @@ export const BACKTEST_RULES = {
   stockTaxRate: 0.003, // 證交稅（賣出）：股票
   etfTaxRate: 0.001, // 證交稅（賣出）：ETF
   limitUpSkip: 0.095, // 開盤比參考價高這麼多就視為買不到
+  trailingAtrMultiple: 3, // 移動停利線 = 進場後最高收盤價 − 倍數 × ATR(14)
 }
 
 // 回測交易的出場原因（Python 端 scraper/backtest.py）

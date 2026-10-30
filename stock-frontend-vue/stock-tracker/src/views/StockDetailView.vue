@@ -1,10 +1,10 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { fetchBacktests, fetchHistory, fetchTrades } from '../api/stocks.js'
+import { fetchBacktests, fetchHistory, fetchLevels, fetchTrades } from '../api/stocks.js'
 import CandlestickChart from '../components/CandlestickChart.vue'
-import { EXIT_REASONS, verdict } from '../utils/backtest.js'
-import { CHART_RANGES, MA_LINES, SUB_CHARTS, TRADE_COLORS } from '../utils/chartConfig.js'
+import { BACKTEST_RULES, EXIT_REASONS, verdict } from '../utils/backtest.js'
+import { CHART_RANGES, LEVEL_COLORS, MA_LINES, SUB_CHARTS, TRADE_COLORS, TRAILING_LINE_COLOR } from '../utils/chartConfig.js'
 import { defaultChartSettings, loadChartSettings, saveChartSettings } from '../utils/chartSettings.js'
 import {
   formatChange,
@@ -16,6 +16,7 @@ import {
   monthsBefore,
   trendClass,
 } from '../utils/format.js'
+import { levelLines, levelRows } from '../utils/levels.js'
 
 const props = defineProps({
   symbol: { type: String, required: true },
@@ -34,9 +35,15 @@ const saved = loadChartSettings()
 const months = ref(saved.months)
 const maKeys = ref(saved.maKeys)
 const subChartKeys = ref(saved.subChartKeys)
+const showLevels = ref(saved.showLevels)
 
-const currentSettings = () => ({ months: months.value, maKeys: maKeys.value, subChartKeys: subChartKeys.value })
-watch([months, maKeys, subChartKeys], () => saveChartSettings(currentSettings()), { deep: true })
+const currentSettings = () => ({
+  months: months.value,
+  maKeys: maKeys.value,
+  subChartKeys: subChartKeys.value,
+  showLevels: showLevels.value,
+})
+watch([months, maKeys, subChartKeys, showLevels], () => saveChartSettings(currentSettings()), { deep: true })
 
 const isDefaultSettings = computed(() => JSON.stringify(currentSettings()) === JSON.stringify(defaultChartSettings()))
 function resetSettings() {
@@ -44,6 +51,7 @@ function resetSettings() {
   months.value = defaults.months
   maKeys.value = defaults.maKeys
   subChartKeys.value = defaults.subChartKeys
+  showLevels.value = defaults.showLevels
 }
 
 async function load() {
@@ -60,6 +68,26 @@ async function load() {
 }
 
 watch(() => props.symbol, load, { immediate: true })
+
+// 參考價位：最新收盤後計算、供下一個交易日參考（不是漲跌預測）
+const levels = ref(null)
+const levelsError = ref('')
+
+async function loadLevels() {
+  levels.value = null
+  levelsError.value = ''
+  try {
+    levels.value = await fetchLevels(props.symbol)
+  } catch (err) {
+    levelsError.value = err.status === 404 ? '這檔股票還沒有參考價位（每日更新程式執行後產生）。' : err.message
+  }
+}
+watch(() => props.symbol, loadLevels, { immediate: true })
+
+const levelTable = computed(() => (levels.value ? levelRows(levels.value) : []))
+const chartLevelLines = computed(() => (levels.value && showLevels.value ? levelLines(levels.value) : []))
+// 參考價位比 K 線舊：今天的更新程式還沒跑完，或參考價位的計算失敗
+const levelsStale = computed(() => levels.value && latest.value && levels.value.basisDate !== latest.value.tradeDate)
 
 // 回測進出場點：選擇記錄在網址（?strategy=&exitRule=），策略選股頁可直接連過來，也可分享
 // 預設不顯示；不是圖表外觀設定，所以不存進瀏覽器
@@ -201,6 +229,13 @@ const changePercent = computed(() => {
               {{ sub.label }}
             </label>
           </fieldset>
+          <fieldset v-if="levels">
+            <legend>價位</legend>
+            <label>
+              <input v-model="showLevels" type="checkbox" />
+              參考價位線
+            </label>
+          </fieldset>
           <button v-if="!isDefaultSettings" type="button" class="reset" @click="resetSettings">恢復預設</button>
         </div>
 
@@ -235,8 +270,59 @@ const changePercent = computed(() => {
           :ma-keys="maKeys"
           :sub-chart-keys="subChartKeys"
           :trades="trades"
+          :trailing-multiple="selectedStrategy && selectedExitRule?.code === 'trailing_atr' ? BACKTEST_RULES.trailingAtrMultiple : null"
+          :level-lines="chartLevelLines"
           @range-change="visibleRange = $event"
         />
+
+        <section v-if="levels" id="levels" class="levels">
+          <h2>參考價位<span class="meta">{{ levels.basisDate }} 收盤後計算，供下一個交易日參考</span></h2>
+          <p v-if="levelsStale" class="status warn">
+            參考價位依 {{ levels.basisDate }} 的收盤計算，K 線已有 {{ latest.tradeDate }} 的資料；每日更新程式下次執行時會重新計算。
+          </p>
+          <p v-if="levels.exDividend" class="status ex" :class="{ warn: levels.exDividend.affectsNextDay }">
+            <template v-if="levels.exDividend.affectsNextDay && levels.nextDay.referenceExact">
+              下一個交易日（{{ levels.exDividend.exDate }}）除{{ levels.exDividend.type }}，每股現金股利
+              {{ formatPrice(levels.exDividend.cashDividend) }} 元：參考價已扣除股利為 {{ formatPrice(levels.nextDay.referencePrice) }}，漲跌停價依此計算。
+            </template>
+            <template v-else-if="levels.exDividend.affectsNextDay">
+              下一個交易日（{{ levels.exDividend.exDate }}）除{{ levels.exDividend.type }}：參考價與漲跌停價需以證交所公告為準，表中仍以收盤價計算。
+            </template>
+            <template v-else>
+              即將除{{ levels.exDividend.type }}：{{ levels.exDividend.exDate }}，每股現金股利
+              {{ levels.exDividend.cashDividend == null ? '尚未公告' : `${formatPrice(levels.exDividend.cashDividend)} 元` }}。當天 K 線會出現缺口，均線等指標也會受影響。
+            </template>
+          </p>
+          <div class="table-wrap">
+            <table class="level-table">
+              <thead>
+                <tr>
+                  <th>價位</th>
+                  <th class="num">價格</th>
+                  <th class="num">距收盤</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in levelTable" :key="row.key" :class="row.kind">
+                  <td>
+                    <span v-if="row.kind !== 'close'" class="swatch" :style="{ '--line-color': LEVEL_COLORS[row.kind] }"></span>
+                    {{ row.label }}<span class="level-note">{{ row.note }}</span>
+                  </td>
+                  <td class="num">{{ formatPrice(row.price) }}</td>
+                  <td class="num" :class="row.kind === 'close' ? '' : trendClass(row.distance)">
+                    {{ row.kind === 'close' ? '—' : formatRate(row.distance) }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="note">
+            都是公式計算的價位，不是漲跌預測。黃金分割取最近 {{ levels.swing.days }} 個交易日的高低點（{{
+              levels.swing.trend === 'up' ? '低點在前，為回檔位置' : '高點在前，為反彈位置'
+            }}）；ATR 停損與回測「移動停利」進場當天的停利線相同。<RouterLink :to="{ name: 'about', hash: '#levels' }">參考價位的算法</RouterLink>
+          </p>
+        </section>
+        <p v-else-if="levelsError" class="meta">參考價位：{{ levelsError }}</p>
 
         <section v-if="selectedStrategy && selectedExitRule" id="backtest-trades" class="backtest">
           <h2>回測交易：{{ selectedStrategy.name }} · {{ selectedExitRule.name }}</h2>
@@ -252,7 +338,9 @@ const changePercent = computed(() => {
             <span :style="{ color: TRADE_COLORS.entry }">▲ 進場</span>（訊號隔一個交易日開盤）、<span
               :style="{ color: TRADE_COLORS.exit }"
               >▼ 出場</span
-            >；底色紅為獲利、綠為虧損、藍為持有中，滑鼠移到 K 線上可看細節。圖表只涵蓋最近一年（{{ tradesOnChart }} 筆），全部交易列在下方。
+            >；底色紅為獲利、綠為虧損、藍為持有中<template v-if="selectedExitRule.code === 'trailing_atr'"
+              >；<span :style="{ color: TRAILING_LINE_COLOR }">— 移動停利線</span>為每筆交易持有期間的停利線</template
+            >，滑鼠移到 K 線上可看細節。圖表只涵蓋最近一年（{{ tradesOnChart }} 筆），全部交易列在下方。
             <RouterLink
               :to="{ name: 'screener', query: { strategy: selectedStrategy.code, scope: symbol }, hash: '#backtest' }"
               >各出場方式比較</RouterLink
@@ -421,7 +509,8 @@ select {
   font-size: 14px;
 }
 
-.backtest h2 {
+.backtest h2,
+.levels h2 {
   margin: 16px 0 4px;
   font-size: 16px;
 }
@@ -477,6 +566,48 @@ thead th {
 .price-cell {
   margin-left: 6px;
   color: #555;
+}
+
+.levels h2 .meta {
+  margin-left: 8px;
+  font-weight: normal;
+}
+
+.status.warn {
+  background: #fff8e6;
+  color: #7a4a00;
+}
+
+.status.ex {
+  margin: 6px 0;
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+.level-table {
+  max-width: 560px;
+}
+
+.level-table td {
+  white-space: normal;
+}
+
+.level-table tr.close td {
+  background: #f1f3f5;
+  font-weight: 600;
+}
+
+.level-note {
+  margin-left: 8px;
+  color: #888;
+  font-size: 12px;
+  font-weight: normal;
+}
+
+.level-table .swatch {
+  width: 12px;
+  margin-right: 4px;
+  vertical-align: middle;
 }
 
 /* 手機：價格換到日期下一行，讓進場、出場、報酬、持有不用左右滑動就看得到 */

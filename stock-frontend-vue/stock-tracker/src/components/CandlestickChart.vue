@@ -13,7 +13,7 @@ import {
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { EXIT_REASONS } from '../utils/backtest.js'
-import { DOWN_COLOR, MA_LINES, SUB_CHARTS, TRADE_COLORS, UP_COLOR } from '../utils/chartConfig.js'
+import { DOWN_COLOR, MA_LINES, SUB_CHARTS, TRADE_COLORS, TRAILING_LINE_COLOR, UP_COLOR } from '../utils/chartConfig.js'
 import { formatChange, formatLots, formatPercent, formatPrice, formatRate, monthsBefore, toLots } from '../utils/format.js'
 
 // 只註冊用到的模組，減少打包大小
@@ -35,6 +35,10 @@ const props = defineProps({
   subChartKeys: { type: Array, default: () => [] },
   // BacktestTradesResponse.trades：有值時標出回測的進出場點與持有期間（只畫與 prices 期間重疊的交易）
   trades: { type: Array, default: () => [] },
+  // 有值時（ATR 倍數）為 trades 畫出移動停利線：進場後最高收盤價 − 倍數 × 當天 ATR，與回測的計算相同
+  trailingMultiple: { type: Number, default: null },
+  // 參考價位的水平線：[{ key, price, color, dashed, text, position }]（utils/levels.js 的 levelLines）
+  levelLines: { type: Array, default: () => [] },
 })
 
 const emit = defineEmits(['range-change'])
@@ -98,6 +102,27 @@ const visibleTrades = computed(() => {
     }))
 })
 
+// 移動停利線：每筆交易一條，從進場日畫到收盤跌破的那天（或最長持有期滿、仍持有中則畫到最後一天）。
+// 進場日早於圖表起點的交易缺少之前的收盤價，算不出正確的最高收盤價，不畫
+const trailingLines = computed(() => {
+  if (!props.trailingMultiple) return []
+  const prices = props.prices
+  const last = prices.length - 1
+  return visibleTrades.value
+    .filter(({ trade, entryIndex, exitIndex }) => entryIndex != null && (!trade.exitDate || exitIndex != null))
+    .map(({ trade, entryIndex, exitIndex }) => {
+      const end = exitIndex == null ? last : trade.exitReason === 'trailing' ? exitIndex - 1 : exitIndex
+      const data = new Array(prices.length).fill(null)
+      let highest = -Infinity
+      for (let i = entryIndex; i <= end; i++) {
+        highest = Math.max(highest, prices[i].closePrice)
+        const atr = value(prices[i], 'atr14')
+        data[i] = atr == null ? null : highest - props.trailingMultiple * atr
+      }
+      return data
+    })
+})
+
 // tooltip 用：每個交易日發生的回測事件
 const tradeEvents = computed(() => {
   const events = new Map()
@@ -136,6 +161,10 @@ function panelTitle(panel) {
       rich.exit = { color: TRADE_COLORS.exit, fontSize: 12 }
       parts.push('{entry|▲ 進場}', '{exit|▼ 出場}')
     }
+    if (trailingLines.value.length) {
+      rich.trail = { color: TRAILING_LINE_COLOR, fontSize: 12 }
+      parts.push('{trail|— 移動停利線}')
+    }
   }
   else if (panel.key === 'volume') parts = ['成交量（張）']
   else parts = [panel.config.title, ...colored(panel.config.lines)]
@@ -165,6 +194,10 @@ function tooltipHtml(index) {
   ]
   for (const text of tradeEvents.value.get(bar.tradeDate) ?? []) {
     lines.push(`<span style="color:${TRADE_COLORS.exit}">${text}</span>`)
+  }
+  const trailing = trailingLines.value.map((data) => data[index]).find((v) => v != null)
+  if (trailing != null) {
+    lines.push(`<span style="color:${TRAILING_LINE_COLOR}">移動停利線 ${formatPrice(trailing)}（收盤跌破則隔日開盤賣出）</span>`)
   }
   if (activeMas.value.length) {
     lines.push(activeMas.value.map((ma) => colored(ma, value(bar, ma.key))).join('　'))
@@ -225,6 +258,20 @@ function holdingAreas() {
       const tone = trade.netReturn == null ? 'open' : trade.netReturn > 0 ? 'win' : 'loss'
       return [{ xAxis: start, itemStyle: { color: TRADE_COLORS[tone] } }, { xAxis: end }]
     }),
+  }
+}
+
+// 參考價位的水平線，標籤放在右端線上；不在目前 Y 軸範圍內的價位（例如遠方的漲跌停）不會顯示
+function levelMarkLines() {
+  if (!props.levelLines.length) return undefined
+  return {
+    silent: true,
+    symbol: 'none',
+    data: props.levelLines.map((line) => ({
+      yAxis: line.price,
+      lineStyle: { color: line.color, type: line.dashed ? 'dashed' : 'solid', width: 1 },
+      label: { formatter: line.text, position: line.position ?? 'insideEndTop', color: line.color, fontSize: 11 },
+    })),
   }
 }
 
@@ -305,8 +352,19 @@ function buildOption() {
         data: prices.map((p) => [p.openPrice, p.closePrice, p.lowPrice, p.highPrice]),
         itemStyle: { color: UP_COLOR, color0: DOWN_COLOR, borderColor: UP_COLOR, borderColor0: DOWN_COLOR },
         markArea: holdingAreas(),
+        markLine: levelMarkLines(),
       },
       ...tradeMarkers(),
+      ...trailingLines.value.map((data) => ({
+        name: '移動停利線',
+        type: 'line',
+        data,
+        showSymbol: false,
+        connectNulls: false,
+        lineStyle: { width: 1.5, color: TRAILING_LINE_COLOR },
+        itemStyle: { color: TRAILING_LINE_COLOR },
+        z: 4,
+      })),
       ...activeMas.value.map((ma) => ({
         name: ma.label,
         type: 'line',
@@ -378,7 +436,7 @@ onBeforeUnmount(() => {
 
 watch(() => props.prices, () => render(false))
 watch(() => props.months, zoomToMonths)
-watch(() => props.trades, () => render(true))
+watch(() => [props.trades, props.trailingMultiple, props.levelLines], () => render(true))
 // flush: 'post'：等容器高度更新後再重繪，副圖數量改變時版面才會正確
 watch(
   () => [props.maKeys, props.subChartKeys],

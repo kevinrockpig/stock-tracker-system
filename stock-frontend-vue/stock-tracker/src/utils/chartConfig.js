@@ -56,9 +56,20 @@ export const CHART_RANGES = [
   { months: 12, label: '1 年' },
 ]
 
+// 參考價位的水平線（K 線圖）與價位表共用的顏色
+export const LEVEL_COLORS = {
+  limit: '#868e96',
+  fib: '#d97706',
+  atrStop: '#7048e8',
+  swing: '#adb5bd',
+}
+// 回測交易的移動停利線
+export const TRAILING_LINE_COLOR = '#7048e8'
+
 export const DEFAULT_MONTHS = 3
 export const DEFAULT_MA_KEYS = MA_LINES.map((ma) => ma.key)
 export const DEFAULT_SUB_CHART_KEYS = ['macd', 'rsi']
+export const DEFAULT_SHOW_LEVELS = true
 
 // 回測進出場點：進場 ▲ 標在當天最低價下方、出場 ▼ 標在最高價上方；持有期間的底色依報酬區分
 export const TRADE_COLORS = {

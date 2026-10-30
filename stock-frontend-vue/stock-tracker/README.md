@@ -5,7 +5,7 @@
 | 頁面 | 網址 | 使用的 API |
 |---|---|---|
 | 股票清單 | `/` | `GET /api/stocks` |
-| 個股 K 線圖 | `/stocks/2330.TW?strategy=ma_bullish&exitRule=hold_5` | `GET /api/stocks/{symbol}/history?from=…`、`GET /api/backtests?scope={symbol}`、`GET /api/stocks/{symbol}/trades?strategy=…&exitRule=…` |
+| 個股 K 線圖 | `/stocks/2330.TW?strategy=ma_bullish&exitRule=hold_5` | `GET /api/stocks/{symbol}/history?from=…`、`GET /api/stocks/{symbol}/levels`、`GET /api/backtests?scope={symbol}`、`GET /api/stocks/{symbol}/trades?strategy=…&exitRule=…` |
 | 策略選股 | `/screener?strategy=golden_cross&days=10&scope=2330.TW` | `GET /api/strategies`、`GET /api/screener?strategy=…&days=…`、`GET /api/stocks`、`GET /api/backtests?scope=…` |
 | 使用說明 | `/about#backtest` | `GET /api/strategies`、`GET /api/backtests` |
 
@@ -20,7 +20,12 @@
   並提醒同時比較多組的運氣成分。
 - 個股頁：「回測進出場點」選擇策略與出場方式（記錄在網址，預設不顯示），K 線圖標出 ▲ 進場、▼ 出場，
   持有期間底色紅為獲利、綠為虧損、藍為持有中，tooltip 顯示交易細節；下方顯示這檔股票的判定與全部交易清單。
+- 選「移動停利」出場方式時，K 線圖另畫出每筆交易的移動停利線（進場後最高收盤價 − 3 × 當天 ATR，與 Python 回測的計算相同）。
 - 判定文字與說明頁的成本數字集中在 `src/utils/backtest.js`（數字須與 Python 的 `scraper/backtest.py` 一致）。
+
+參考價位（個股頁，資料由 Python 每日收盤後計算）：價位表依價格由高到低列出漲跌停、60 日高低點、黃金分割、收盤價、ATR 停損，
+並顯示距收盤的百分比；有除權息預告時顯示提醒（下一個交易日除息時說明參考價已扣除股利）。
+K 線圖的「參考價位線」開關畫出漲跌停、黃金分割與 ATR 停損的水平線（設定記在瀏覽器）。轉換邏輯在 `src/utils/levels.js`。
 
 K 線圖使用 ECharts（類別軸，只排列交易日；休市日不留空白），支援 1 個月 / 3 個月 / 6 個月 / 1 年區間、滑鼠滾輪縮放與下方滑桿。
 成交量單位為「張」（1 張 = 1,000 股）。
@@ -30,9 +35,9 @@ K 線圖使用 ECharts（類別軸，只排列交易日；休市日不留空白�
 - 均線：MA5 / MA10 / MA20 / MA60 疊加在 K 線上，可個別開關
 - 副圖：MACD（DIF、MACD、OSC 柱）、RSI（6、12，虛線 30 / 70）、KD（9,3,3，虛線 20 / 80），可個別開關，預設顯示 MACD 與 RSI
 - 指標顏色與副圖設定集中在 `src/utils/chartConfig.js`
-- 區間與指標的選擇存在瀏覽器的 localStorage（`src/utils/chartSettings.js`），所有個股共用，重新整理後沿用；可按「恢復預設」
+- 區間、指標與參考價位線的選擇存在瀏覽器的 localStorage（`src/utils/chartSettings.js`），所有個股共用，重新整理後沿用；可按「恢復預設」
 
-使用說明頁（`/about`）：免責聲明、資料性質、指標計算方式與常見解讀、策略條件（取自 API）、回測方法與限制、資料來源。
+使用說明頁（`/about`）：免責聲明、資料性質、指標計算方式與常見解讀、策略條件（取自 API）、回測方法與限制、參考價位的算法、資料來源。
 每頁頁尾有免責聲明連結；個股頁與策略選股頁的說明文字也連到對應段落（例如 `/about#indicators`）。
 
 導覽：導覽列固定在頂端；說明頁目錄固定（桌面為左側欄、手機為導覽列下方橫列）並標示目前段落；捲動超過約一個畫面高時出現「回到頂端」按鈕；

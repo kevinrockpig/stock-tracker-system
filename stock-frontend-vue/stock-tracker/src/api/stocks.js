@@ -77,3 +77,8 @@ export function fetchTrades(symbol, strategy, exitRule) {
   const params = new URLSearchParams({ strategy, exitRule })
   return getJson(`/api/stocks/${encodeURIComponent(symbol)}/trades?${params}`)
 }
+
+// 最新的參考價位（供下一個交易日參考）；尚未計算時回 404
+export function fetchLevels(symbol) {
+  return getJson(`/api/stocks/${encodeURIComponent(symbol)}/levels`)
+}

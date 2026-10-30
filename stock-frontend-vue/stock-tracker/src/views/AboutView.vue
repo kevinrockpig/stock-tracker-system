@@ -13,6 +13,7 @@ const SECTIONS = [
   { id: 'indicators', label: '技術指標' },
   { id: 'strategies', label: '選股策略' },
   { id: 'backtest', label: '回測方法' },
+  { id: 'levels', label: '參考價位' },
   { id: 'sources', label: '資料來源' },
 ]
 
@@ -278,10 +279,56 @@ onBeforeUnmount(() => {
           <li>規則與參數事先固定，沒有為了讓結果好看而反覆調整；即便如此，過去的結果也不代表未來。</li>
         </ul>
 
+        <h2 id="levels">參考價位</h2>
+        <p>
+          個股頁的「參考價位」在每個交易日收盤後計算，供<strong>下一個交易日</strong>參考。都是依公式算出的價格，<strong>不是漲跌預測</strong>，也不代表一定會在這些價位止跌或止漲。
+        </p>
+        <div class="table-wrap stack">
+          <table>
+            <thead>
+              <tr>
+                <th>價位</th>
+                <th>計算方式</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">漲停價 / 跌停價</th>
+                <td data-label="計算方式">
+                  下一個交易日的參考價 ±10%，再依升降單位取到有效價格（漲停往下、跌停往上取，不會超過 10%）。參考價平常是當天收盤價；下一個交易日除息時扣除現金股利。
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">黃金分割</th>
+                <td data-label="計算方式">
+                  取最近 60 個交易日的最高價與最低價。低點在前、高點在後（上漲波段）時，計算從高點回檔 38.2%、50%、61.8% 的位置；高點在前（下跌波段）時，計算從低點反彈的位置。
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">ATR 停損</th>
+                <td data-label="計算方式">
+                  收盤價 − {{ BACKTEST_RULES.trailingAtrMultiple }} × ATR(14)。與回測「移動停利」進場當天的停利線相同；之後每天的停利線為「進場後最高收盤價 − {{ BACKTEST_RULES.trailingAtrMultiple }} × 當天 ATR」：收盤創新高時跟著上移，波動變大（ATR 變大）時也會略為下移。
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">除權息提醒</th>
+                <td data-label="計算方式">證交所、櫃買中心的除權除息預告中，最近一次的除權息日與現金股利。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <ul class="small">
+          <li>除權（配股、現金增資）的參考價還需要認購價等資料，系統不自行計算，會提示以證交所公告為準。</li>
+          <li>「下一個交易日」以週一至週五判斷，系統不知道國定假日與颱風假。</li>
+          <li>國外成分 ETF 沒有漲跌幅限制，系統仍以 10% 計算。</li>
+          <li>K 線圖可用「參考價位線」開關這些水平線；超出目前圖表價格範圍的價位（例如較遠的漲跌停）不會顯示，請看價位表。</li>
+        </ul>
+
         <h2 id="sources">資料來源</h2>
         <ul>
           <li>股價：Yahoo Finance（透過 yfinance 取得），僅供個人使用。</li>
-          <li>技術指標、選股結果與回測：由本系統依上述股價計算。</li>
+          <li>技術指標、選股結果、回測與參考價位：由本系統依上述股價計算。</li>
+          <li>除權除息預告：臺灣證券交易所、證券櫃檯買賣中心開放資料。</li>
         </ul>
       </div>
     </div>
