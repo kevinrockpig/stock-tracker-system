@@ -82,7 +82,7 @@ flowchart LR
 - **未還原除息**：與券商報價一致，除息日 K 線會有跳空缺口；股票分割已由資料來源調整
 - **只計交易日**：週末、國定假日與颱風假不會出現；yfinance 在休市日偶爾補上的假 K 線（成交量 0、開高低收相同）會被排除
 - **資料來源缺漏**：yfinance 偶有少數交易日缺漏，已知日期列在 `verify.sql` 查詢 8
-- **觀察名單**：設定在 `stock-scraper-python/scraper/config.py` 的 `WATCHLIST`
+- **觀察名單**：設定在 `stock-scraper-python/scraper/config.py` 的 `STOCK_GROUPS`（0050 成分股與自選兩組，合計 58 檔）
 
 ## 測試
 

@@ -53,6 +53,10 @@ stocks = Table(
     Column("currency", String(10)),
     # 資料庫中完整歷史的起始設定（最近一次完整重抓時的 config.HISTORY_START）；NULL 表示尚未補齊歷史
     Column("history_from", Date),
+    # 所屬組別代碼，以逗號分隔（例如 "TW50,CUSTOM"，見 config.STOCK_GROUPS）；NULL 為不在目前的觀察名單
+    Column("group_codes", String(100)),
+    # 上市（上櫃）日期，來自官方公司基本資料（見 listing.py）；只保留這天起的日 K。ETF 為 NULL
+    Column("listed_date", Date),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )
@@ -335,13 +339,46 @@ def init_schema(engine: Engine) -> list[str]:
     return added
 
 
-def upsert_stock(conn: Connection, symbol: str, name: str, currency: str | None) -> None:
-    stmt = pg_insert(stocks).values(symbol=symbol, name=name, currency=currency)
+def upsert_stock(
+    conn: Connection, symbol: str, name: str, currency: str | None, groups: list[str], listed_date=None,
+) -> None:
+    stmt = pg_insert(stocks).values(
+        symbol=symbol, name=name, currency=currency, group_codes=",".join(groups) or None, listed_date=listed_date,
+    )
     stmt = stmt.on_conflict_do_update(
         index_elements=[stocks.c.symbol],
-        set_={"name": stmt.excluded.name, "currency": stmt.excluded.currency, "updated_at": func.now()},
+        set_={
+            "name": stmt.excluded.name, "currency": stmt.excluded.currency,
+            "group_codes": stmt.excluded.group_codes,
+            # 這次沒取得上市日期（例如官方網站暫時無法連線）時保留原本的紀錄
+            "listed_date": func.coalesce(stmt.excluded.listed_date, stocks.c.listed_date),
+            "updated_at": func.now(),
+        },
     )
     conn.execute(stmt)
+
+
+def get_listed_date(conn: Connection, symbol: str):
+    return conn.execute(select(stocks.c.listed_date).where(stocks.c.symbol == symbol)).scalar()
+
+
+def delete_before_listing(conn: Connection, symbol: str, listed_date) -> int:
+    """刪除上市（上櫃）日之前的日 K 與除權息事件（指標、策略訊號、參考價位隨外鍵一併刪除），回傳刪除的日 K 筆數。"""
+    conn.execute(stock_actions.delete().where(stock_actions.c.symbol == symbol, stock_actions.c.ex_date < listed_date))
+    result = conn.execute(
+        stock_prices.delete().where(stock_prices.c.symbol == symbol, stock_prices.c.trade_date < listed_date)
+    )
+    return result.rowcount
+
+
+def clear_removed_groups(conn: Connection, symbols) -> int:
+    """已從觀察名單移除的股票：清除組別（資料保留，網站可據此不再列出）。回傳筆數。"""
+    result = conn.execute(
+        stocks.update()
+        .where(stocks.c.symbol.not_in(list(symbols)), stocks.c.group_codes.is_not(None))
+        .values(group_codes=None, updated_at=func.now())
+    )
+    return result.rowcount
 
 
 def delete_placeholder_rows(conn: Connection, symbol: str) -> int:

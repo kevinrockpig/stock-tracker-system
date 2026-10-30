@@ -47,7 +47,7 @@ import pandas as pd
 from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
 
-from scraper.config import WATCHLIST, ConfigError, build_database_url
+from scraper.config import STOCK_GROUPS, WATCHLIST, ConfigError, build_database_url
 from scraper.db import (
     STAT_VALUE_COLUMNS,
     SchemaMismatchError,
@@ -480,7 +480,7 @@ def backtest_symbol(symbol: str, frame: pd.DataFrame, signals: dict, dividends: 
     return SymbolResult(bars, trades, baselines)
 
 
-ALL_SCOPE = "ALL"  # 觀察名單全部股票合併統計
+ALL_SCOPE = "ALL"  # 觀察名單全部股票合併統計；另有各組別（config.STOCK_GROUPS 的代碼）的合併統計
 
 
 def middle_trading_date(results: dict[str, SymbolResult]) -> date | None:
@@ -497,6 +497,11 @@ def build_stats(results: dict[str, SymbolResult]) -> list[dict]:
         for code in rules_for(strategy):
             scopes = {symbol: [symbol] for symbol in results}
             scopes[ALL_SCOPE] = list(results)
+            # 組別：例如 TW50（0050 成分股）、CUSTOM（自選），可比較不同選股範圍的結果是否一致
+            for group_code, group in STOCK_GROUPS.items():
+                members = [s for s in group["stocks"] if s in results]
+                if members:
+                    scopes[group_code] = members
             for scope, symbols in scopes.items():
                 trades = {s: results[s].trades[(strategy, code)] for s in symbols}
                 baselines = {s: results[s].baselines[code] for s in symbols}

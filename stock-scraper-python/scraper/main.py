@@ -22,12 +22,16 @@ from scraper.config import (
     OVERLAP_TRADING_DAYS,
     WATCHLIST,
     ConfigError,
+    groups_of,
     build_database_url,
     env_file_permission_warning,
 )
 from scraper.db import (
     SchemaMismatchError,
+    clear_removed_groups,
+    delete_before_listing,
     delete_placeholder_rows,
+    get_listed_date,
     get_history_from,
     init_schema,
     load_closes,
@@ -51,28 +55,30 @@ from scraper.fetcher import (
     to_records,
 )
 from scraper.indicators import compute_indicators, to_indicator_records
-from scraper.levels import log_levels, run_reference_levels
+from scraper.levels import log_levels, market_code, run_reference_levels
+from scraper.listing import fetch_listing_dates
 from scraper.strategies import STRATEGIES, evaluate_strategies, to_signal_set
 
 logger = logging.getLogger("scraper")
 
 
-def fetch_with_history(engine, symbol: str, force_full: bool) -> tuple[FetchResult, bool]:
-    """增量抓日 K；需要時改抓 HISTORY_START 起的完整歷史。回傳（結果, 是否為完整歷史）。"""
+def fetch_with_history(engine, symbol: str, force_full: bool, listed_date=None) -> tuple[FetchResult, bool]:
+    """增量抓日 K；需要時改抓完整歷史（HISTORY_START 或上市日起，取較晚者）。回傳（結果, 是否為完整歷史）。"""
+    full_start = max(HISTORY_START, listed_date) if listed_date else HISTORY_START
     with engine.connect() as conn:
         history_from = get_history_from(conn, symbol)
         start = overlap_start(conn, symbol, OVERLAP_TRADING_DAYS)
     if force_full or history_from is None or history_from > HISTORY_START or start is None:
         if not force_full:
-            logger.info("[%s] 資料庫尚未有 %s 起的完整歷史，改抓完整歷史", symbol, HISTORY_START)
-        return fetch_daily_prices(symbol, start=HISTORY_START), True
+            logger.info("[%s] 資料庫尚未有 %s 起的完整歷史，改抓完整歷史", symbol, full_start)
+        return fetch_daily_prices(symbol, start=full_start), True
 
     result = fetch_daily_prices(symbol, start=start)
     with engine.connect() as conn:
         stored = load_closes(conn, symbol, result.prices["trade_date"].head(READJUST_CHECK_DAYS))
     if reason := detect_readjustment(result.prices, stored):
         logger.warning("[%s] %s，改抓 %s 起的完整歷史", symbol, reason, HISTORY_START)
-        return fetch_daily_prices(symbol, start=HISTORY_START), True
+        return fetch_daily_prices(symbol, start=full_start), True
     return result, False
 
 
@@ -102,18 +108,32 @@ def run(force_full: bool = False) -> int:
         logger.info("已補上新版新增的欄位：%s", "、".join(added))
     logger.info("資料表檢查完成：stocks, stock_prices, stock_actions, stock_indicators, strategy_signals")
 
+    # 上市（上櫃）日期：只保留這天起的日 K（排除興櫃期間等，見 listing.py）；無法取得時沿用資料庫中的紀錄
+    try:
+        listing_dates = fetch_listing_dates()
+        logger.info("已取得官方上市 / 上櫃日期 %d 家", len(listing_dates))
+    except Exception as exc:
+        logger.warning("無法取得官方上市 / 上櫃日期，沿用資料庫中的紀錄：%s", exc)
+        listing_dates = {}
+
     failed = []
     dates_by_symbol = {}
     latest_signals = {}  # symbol → (最新交易日, 當天符合的策略)
     for symbol, name in WATCHLIST.items():
         try:
-            result, full = fetch_with_history(engine, symbol, force_full)
+            listed = listing_dates.get(market_code(symbol))
+            if listed is None and not listing_dates:
+                with engine.connect() as conn:
+                    listed = get_listed_date(conn, symbol)
+            result, full = fetch_with_history(engine, symbol, force_full, listed)
             df, currency = result.prices, result.currency
             with engine.begin() as conn:
-                upsert_stock(conn, symbol, name, currency)
+                upsert_stock(conn, symbol, name, currency, groups_of(symbol), listed)
                 removed = delete_placeholder_rows(conn, symbol)
                 counts = upsert_prices(conn, to_records(symbol, df))
                 action_counts = upsert_actions(conn, to_action_records(symbol, result.actions))
+                if listed and (before := delete_before_listing(conn, symbol, listed)):
+                    logger.info("[%s] 刪除上市（上櫃）日 %s 之前的日 K %d 筆", symbol, listed, before)
                 if full:
                     mark_history_complete(conn, symbol, HISTORY_START)
                 # 以資料庫中的完整日 K 計算，確保指標與 stock_prices 的日期逐筆對應
@@ -164,6 +184,9 @@ def run(force_full: bool = False) -> int:
             last_day["trade_date"], "、".join(STRATEGIES[c] for c in matched) or "無",
         )
 
+    with engine.begin() as conn:
+        if removed_count := clear_removed_groups(conn, WATCHLIST):
+            logger.info("已從觀察名單移除 %d 檔（資料保留，清除組別）", removed_count)
     warn_missing_dates(dates_by_symbol)
     log_strategy_summary(latest_signals)
     try:
