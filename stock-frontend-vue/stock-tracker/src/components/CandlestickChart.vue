@@ -1,23 +1,26 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts/core'
-import { BarChart, CandlestickChart, LineChart } from 'echarts/charts'
+import { BarChart, CandlestickChart, LineChart, ScatterChart } from 'echarts/charts'
 import {
   AxisPointerComponent,
   DataZoomComponent,
   GridComponent,
+  MarkAreaComponent,
   MarkLineComponent,
   TitleComponent,
   TooltipComponent,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import { DOWN_COLOR, MA_LINES, SUB_CHARTS, UP_COLOR } from '../utils/chartConfig.js'
-import { formatChange, formatLots, formatPercent, formatPrice, monthsBefore, toLots } from '../utils/format.js'
+import { EXIT_REASONS } from '../utils/backtest.js'
+import { DOWN_COLOR, MA_LINES, SUB_CHARTS, TRADE_COLORS, UP_COLOR } from '../utils/chartConfig.js'
+import { formatChange, formatLots, formatPercent, formatPrice, formatRate, monthsBefore, toLots } from '../utils/format.js'
 
 // 只註冊用到的模組，減少打包大小
 echarts.use([
-  CandlestickChart, BarChart, LineChart,
-  GridComponent, TooltipComponent, DataZoomComponent, AxisPointerComponent, MarkLineComponent, TitleComponent,
+  CandlestickChart, BarChart, LineChart, ScatterChart,
+  GridComponent, TooltipComponent, DataZoomComponent, AxisPointerComponent, MarkAreaComponent, MarkLineComponent,
+  TitleComponent,
   CanvasRenderer,
 ])
 
@@ -30,6 +33,8 @@ const props = defineProps({
   maKeys: { type: Array, default: () => [] },
   // 要顯示的副圖（chartConfig.SUB_CHARTS 的 key），依 SUB_CHARTS 的順序排列
   subChartKeys: { type: Array, default: () => [] },
+  // BacktestTradesResponse.trades：有值時標出回測的進出場點與持有期間（只畫與 prices 期間重疊的交易）
+  trades: { type: Array, default: () => [] },
 })
 
 const emit = defineEmits(['range-change'])
@@ -74,6 +79,46 @@ function value(bar, key) {
   return bar.indicators?.[key] ?? null
 }
 
+const dateIndex = computed(() => new Map(props.prices.map((bar, i) => [bar.tradeDate, i])))
+
+// 與圖表期間重疊的交易：持有期間的起訖位置（進場早於圖表起點時從第一根 K 線開始；仍持有中則畫到最後一根）
+const visibleTrades = computed(() => {
+  const prices = props.prices
+  if (!prices.length) return []
+  const first = prices[0].tradeDate
+  const last = prices.at(-1).tradeDate
+  return props.trades
+    .filter((trade) => trade.entryDate <= last && (trade.exitDate ?? last) >= first)
+    .map((trade) => ({
+      trade,
+      entryIndex: dateIndex.value.get(trade.entryDate), // 進場在圖表期間之前時為 undefined
+      exitIndex: trade.exitDate ? dateIndex.value.get(trade.exitDate) : undefined,
+      start: trade.entryDate >= first ? trade.entryDate : first,
+      end: trade.exitDate ?? last,
+    }))
+})
+
+// tooltip 用：每個交易日發生的回測事件
+const tradeEvents = computed(() => {
+  const events = new Map()
+  const add = (date, text) => events.set(date, [...(events.get(date) ?? []), text])
+  for (const trade of props.trades) {
+    add(trade.signalDate, '回測訊號（收盤後出現，下一個交易日開盤進場）')
+    add(trade.entryDate, `▲ 回測進場：開盤 ${formatPrice(trade.entryPrice)}`)
+    if (trade.exitDate) {
+      const dividends = trade.dividends > 0 ? `，含股利 ${formatPrice(trade.dividends)}` : ''
+      add(
+        trade.exitDate,
+        `▼ 回測出場：${formatPrice(trade.exitPrice)}（${EXIT_REASONS[trade.exitReason] ?? trade.exitReason}）` +
+          `<br>　報酬 ${formatRate(trade.netReturn)}，持有 ${trade.holdingDays} 個交易日${dividends}`,
+      )
+    } else {
+      add(props.prices.at(-1)?.tradeDate, `回測持有中：已持有 ${trade.holdingDays} 個交易日`)
+    }
+  }
+  return events
+})
+
 // 標題列兼圖例：以 ECharts rich text 為每個名稱上色
 function panelTitle(panel) {
   const rich = {}
@@ -84,7 +129,14 @@ function panelTitle(panel) {
     })
 
   let parts
-  if (panel.key === 'kline') parts = ['K 線', ...colored(activeMas.value)]
+  if (panel.key === 'kline') {
+    parts = ['K 線', ...colored(activeMas.value)]
+    if (props.trades.length) {
+      rich.entry = { color: TRADE_COLORS.entry, fontSize: 12 }
+      rich.exit = { color: TRADE_COLORS.exit, fontSize: 12 }
+      parts.push('{entry|▲ 進場}', '{exit|▼ 出場}')
+    }
+  }
   else if (panel.key === 'volume') parts = ['成交量（張）']
   else parts = [panel.config.title, ...colored(panel.config.lines)]
 
@@ -111,6 +163,9 @@ function tooltipHtml(index) {
     `<span style="color:${changeColor}">漲跌 ${formatChange(change)}（${formatPercent(percent)}）</span>`,
     `成交量 ${formatLots(bar.volume)} 張`,
   ]
+  for (const text of tradeEvents.value.get(bar.tradeDate) ?? []) {
+    lines.push(`<span style="color:${TRADE_COLORS.exit}">${text}</span>`)
+  }
   if (activeMas.value.length) {
     lines.push(activeMas.value.map((ma) => colored(ma, value(bar, ma.key))).join('　'))
   }
@@ -161,6 +216,45 @@ function subChartSeries(panel, axisIndex) {
   return series
 }
 
+// 回測持有期間的底色：獲利紅、虧損綠（台股慣例）、持有中藍
+function holdingAreas() {
+  if (!visibleTrades.value.length) return undefined
+  return {
+    silent: true,
+    data: visibleTrades.value.map(({ trade, start, end }) => {
+      const tone = trade.netReturn == null ? 'open' : trade.netReturn > 0 ? 'win' : 'loss'
+      return [{ xAxis: start, itemStyle: { color: TRADE_COLORS[tone] } }, { xAxis: end }]
+    }),
+  }
+}
+
+function tradeMarkers() {
+  if (!visibleTrades.value.length) return []
+  const prices = props.prices
+  const marker = (name, color, rotate, offset, points) => ({
+    name,
+    type: 'scatter',
+    data: points,
+    symbol: 'triangle',
+    symbolSize: 10,
+    symbolRotate: rotate,
+    symbolOffset: [0, offset],
+    itemStyle: { color },
+    clip: false, // 標記在 K 線上下方，貼近圖區邊緣時也要完整顯示
+    z: 5,
+  })
+  const entries = visibleTrades.value
+    .filter((t) => t.entryIndex != null)
+    .map((t) => [t.entryIndex, prices[t.entryIndex].lowPrice])
+  const exits = visibleTrades.value
+    .filter((t) => t.exitIndex != null)
+    .map((t) => [t.exitIndex, prices[t.exitIndex].highPrice])
+  return [
+    marker('回測進場', TRADE_COLORS.entry, 0, 10, entries),
+    marker('回測出場', TRADE_COLORS.exit, 180, -10, exits),
+  ]
+}
+
 function buildOption() {
   const prices = props.prices
   const dates = prices.map((p) => p.tradeDate)
@@ -172,7 +266,8 @@ function buildOption() {
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'cross' },
-      formatter: (params) => tooltipHtml(params[0].dataIndex),
+      // 以日期找出 K 線位置（回測標記的 dataIndex 不是 K 線的位置）
+      formatter: (params) => tooltipHtml(dateIndex.value.get(params[0].axisValue)),
     },
     // 所有圖區共用十字線
     axisPointer: { link: [{ xAxisIndex: 'all' }] },
@@ -209,7 +304,9 @@ function buildOption() {
         // ECharts K 線資料順序為 [開, 收, 低, 高]
         data: prices.map((p) => [p.openPrice, p.closePrice, p.lowPrice, p.highPrice]),
         itemStyle: { color: UP_COLOR, color0: DOWN_COLOR, borderColor: UP_COLOR, borderColor0: DOWN_COLOR },
+        markArea: holdingAreas(),
       },
+      ...tradeMarkers(),
       ...activeMas.value.map((ma) => ({
         name: ma.label,
         type: 'line',
@@ -281,6 +378,7 @@ onBeforeUnmount(() => {
 
 watch(() => props.prices, () => render(false))
 watch(() => props.months, zoomToMonths)
+watch(() => props.trades, () => render(true))
 // flush: 'post'：等容器高度更新後再重繪，副圖數量改變時版面才會正確
 watch(
   () => [props.maKeys, props.subChartKeys],

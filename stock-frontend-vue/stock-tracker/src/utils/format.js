@@ -43,3 +43,17 @@ export function monthsBefore(dateString, months) {
   const [year, month, day] = dateString.split('-').map(Number)
   return isoDate(new Date(year, month - 1 - months, day))
 }
+
+// 小數比率轉百分比（0.0048 → +0.48%）；回測 API 的報酬、勝率皆為小數
+export function formatRate(value, { digits = 2, signed = true } = {}) {
+  if (value == null) return '—'
+  const percent = value * 100
+  // 四捨五入後為 0 時不顯示正負號，避免出現「-0.00%」
+  const rounded = Number(percent.toFixed(digits))
+  const sign = signed && rounded > 0 ? '+' : ''
+  return `${sign}${(rounded === 0 ? 0 : rounded).toFixed(digits)}%`
+}
+
+export function formatNumber(value, digits = 2) {
+  return value == null ? '—' : value.toFixed(digits)
+}

@@ -1,8 +1,10 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { fetchStrategies } from '../api/stocks.js'
+import { fetchBacktests, fetchStrategies } from '../api/stocks.js'
+import { BACKTEST_RULES, falsePassChance } from '../utils/backtest.js'
 import { MA_LINES, SUB_CHARTS } from '../utils/chartConfig.js'
+import { formatRate } from '../utils/format.js'
 import { scrollMotion } from '../utils/scroll.js'
 
 const SECTIONS = [
@@ -10,6 +12,7 @@ const SECTIONS = [
   { id: 'data', label: '資料性質' },
   { id: 'indicators', label: '技術指標' },
   { id: 'strategies', label: '選股策略' },
+  { id: 'backtest', label: '回測方法' },
   { id: 'sources', label: '資料來源' },
 ]
 
@@ -27,6 +30,20 @@ onMounted(async () => {
     strategyError.value = err.message
   }
 })
+
+// 出場規則、回測期間與比較組數取自回測 API；無法連線時只少這些數字，說明照常顯示
+const backtest = ref(null)
+onMounted(async () => {
+  try {
+    backtest.value = await fetchBacktests()
+  } catch {
+    // 出場規則表改顯示「無法取得」
+  }
+})
+
+const rate = (value, digits = 4) => formatRate(value, { digits, signed: false })
+// 價格不變時一買一賣的成本（股票）：買進手續費 + 賣出手續費 + 證交稅
+const roundTripCost = rate(2 * BACKTEST_RULES.feeRate + BACKTEST_RULES.stockTaxRate, 3)
 
 // 目錄標示目前讀到的段落
 const route = useRoute()
@@ -185,10 +202,86 @@ onBeforeUnmount(() => {
           <li>「黃金交叉」與「突破均線」只在發生的當天成立，隔天不會重複計算；「多頭排列」則是每天都符合就每天成立。</li>
         </ul>
 
+        <h2 id="backtest">回測方法與限制</h2>
+        <p>
+          回測是把選股策略套用到過去的資料，看「如果當時照規則操作」的結果。系統每天收盤後重新計算一次<template v-if="backtest"
+            >，目前期間為 {{ backtest.periodStart }} ~ {{ backtest.periodEnd }}（資料起始的一段期間用來讓指標穩定，不計入）</template
+          >。結果顯示在「策略選股」頁與個股頁的 K 線圖。
+        </p>
+
+        <h3>進場</h3>
+        <ul>
+          <li>訊號要等收盤後才知道，因此在<strong>下一個交易日以開盤價買進</strong>。</li>
+          <li>
+            開盤價比參考價高 {{ rate(BACKTEST_RULES.limitUpSkip, 1) }} 以上（接近漲停）視為買不到，略過這次訊號。參考價為前一日收盤價，除息日再扣除股利。
+          </li>
+          <li>同一檔股票持有中出現的新訊號不再進場。「多頭排列」連續多天成立時，只在開始成立的第一天進場。</li>
+        </ul>
+
+        <h3>出場</h3>
+        <div v-if="backtest" class="table-wrap stack">
+          <table>
+            <thead>
+              <tr>
+                <th>出場方式</th>
+                <th>規則</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="rule in backtest.exitRules" :key="rule.code">
+                <th scope="row">{{ rule.name }}</th>
+                <td data-label="規則">{{ rule.description }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-else class="status">無法取得出場規則（回測 API 未連線）。</p>
+        <p class="small">ATR(14) 是最近 14 個交易日的平均真實波動幅度；股價波動越大，移動停利線離最高價越遠。</p>
+
+        <h3>成本與股利</h3>
+        <ul>
+          <li>
+            手續費 {{ rate(BACKTEST_RULES.feeRate) }}，買進、賣出各收一次（不計券商折扣）；賣出時的證交稅：股票
+            {{ rate(BACKTEST_RULES.stockTaxRate, 1) }}、ETF {{ rate(BACKTEST_RULES.etfTaxRate, 1) }}。股票價格不變時，一買一賣約虧
+            {{ roundTripCost }}。
+          </li>
+          <li>持有期間遇到除息（進場日之後、出場日當天以前），現金股利計入報酬。</li>
+          <li>報酬是<strong>每一筆交易</strong>的報酬率，不是年化報酬，也不是整體資金的成長。</li>
+        </ul>
+
+        <h3>如何判斷有沒有優勢</h3>
+        <ul>
+          <li>
+            <strong>基準</strong>：同一檔股票「任何一個交易日都照同樣規則進出場」的平均報酬。股票長期上漲時，隨便哪天買都可能賺錢，策略要贏過這個基準，訊號才有意義。
+          </li>
+          <li><strong>超額報酬</strong> = 每筆交易報酬 − 同一檔股票的基準，並附 95% 信賴區間（交易越多、報酬越穩定，區間越窄）。</li>
+          <li>
+            <strong>穩健性</strong>：回測期間從中間的交易日<template v-if="backtest">（{{ backtest.splitDate }}）</template>切成前後兩段，各段和同一段期間的基準比較，避免只靠某一段行情。
+          </li>
+          <li>
+            標示「<strong>歷史上有優勢</strong>」需同時符合：超額報酬的區間下限大於 0，而且前後兩段的超額報酬都大於 0。其他情況標示「歷史上無明顯優勢」。
+          </li>
+          <li>勝率的區間以 Wilson 方法計算；單一股票的交易次數較少，區間較寬，判斷以全部合併的結果為主。</li>
+        </ul>
+
+        <h3>限制</h3>
+        <ul>
+          <li>假設都能以開盤價或收盤價成交；實際交易會有滑價、買不到或賣不掉的情況。</li>
+          <li>觀察名單是現在挑選的股票（倖存者偏差）：過去表現好的股票，回測結果自然比較好看。</li>
+          <li>股價與除權息資料來自 Yahoo Finance，偶有缺漏；減資退還的現金（例如鴻海 2018 年減資）沒有計入。</li>
+          <li>
+            同時比較了{{ backtest ? ` ${backtest.comparisons} 組` : '多組' }}（策略 × 出場方式）。即使全都沒有真正的優勢，也可能有組別剛好通過<template
+              v-if="backtest"
+              >（機率最多約 {{ falsePassChance(backtest.comparisons) }}%）</template
+            >，所以「有優勢」代表值得繼續觀察，不是保證。
+          </li>
+          <li>規則與參數事先固定，沒有為了讓結果好看而反覆調整；即便如此，過去的結果也不代表未來。</li>
+        </ul>
+
         <h2 id="sources">資料來源</h2>
         <ul>
           <li>股價：Yahoo Finance（透過 yfinance 取得），僅供個人使用。</li>
-          <li>技術指標與選股結果：由本系統依上述股價計算。</li>
+          <li>技術指標、選股結果與回測：由本系統依上述股價計算。</li>
         </ul>
       </div>
     </div>
@@ -241,6 +334,11 @@ h2 {
   padding-top: 8px;
   border-top: 1px solid #e5e7eb;
   font-size: 18px;
+}
+
+h3 {
+  margin: 16px 0 4px;
+  font-size: 15px;
 }
 
 .content > h2:first-child {

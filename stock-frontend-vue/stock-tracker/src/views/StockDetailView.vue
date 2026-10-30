@@ -1,10 +1,21 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { fetchHistory } from '../api/stocks.js'
+import { useRoute, useRouter } from 'vue-router'
+import { fetchBacktests, fetchHistory, fetchTrades } from '../api/stocks.js'
 import CandlestickChart from '../components/CandlestickChart.vue'
-import { CHART_RANGES, MA_LINES, SUB_CHARTS } from '../utils/chartConfig.js'
+import { EXIT_REASONS, verdict } from '../utils/backtest.js'
+import { CHART_RANGES, MA_LINES, SUB_CHARTS, TRADE_COLORS } from '../utils/chartConfig.js'
 import { defaultChartSettings, loadChartSettings, saveChartSettings } from '../utils/chartSettings.js'
-import { formatChange, formatLots, formatPercent, formatPrice, isoDate, monthsBefore, trendClass } from '../utils/format.js'
+import {
+  formatChange,
+  formatLots,
+  formatPercent,
+  formatPrice,
+  formatRate,
+  isoDate,
+  monthsBefore,
+  trendClass,
+} from '../utils/format.js'
 
 const props = defineProps({
   symbol: { type: String, required: true },
@@ -49,6 +60,74 @@ async function load() {
 }
 
 watch(() => props.symbol, load, { immediate: true })
+
+// 回測進出場點：選擇記錄在網址（?strategy=&exitRule=），策略選股頁可直接連過來，也可分享
+// 預設不顯示；不是圖表外觀設定，所以不存進瀏覽器
+const route = useRoute()
+const router = useRouter()
+
+const backtest = ref(null) // 這檔股票的回測統計（BacktestResponse），也提供策略與出場規則的選項
+const backtestError = ref('')
+
+async function loadBacktest() {
+  backtest.value = null
+  backtestError.value = ''
+  try {
+    backtest.value = await fetchBacktests(props.symbol)
+  } catch (err) {
+    backtestError.value = err.status === 404 ? '這檔股票還沒有回測結果（每日更新程式執行後產生）。' : err.message
+  }
+}
+watch(() => props.symbol, loadBacktest, { immediate: true })
+
+const strategyOptions = computed(() => {
+  const seen = new Map()
+  for (const result of backtest.value?.results ?? []) seen.set(result.strategy.code, result.strategy)
+  return [...seen.values()]
+})
+const exitRuleOptions = computed(() => backtest.value?.exitRules ?? [])
+const selectedStrategy = computed(() => strategyOptions.value.find((s) => s.code === route.query.strategy))
+const selectedExitRule = computed(
+  () => exitRuleOptions.value.find((rule) => rule.code === route.query.exitRule) ?? exitRuleOptions.value[0],
+)
+
+function selectBacktest(changes) {
+  const query = { strategy: selectedStrategy.value?.code, exitRule: selectedExitRule.value?.code, ...changes }
+  router.replace({ query: query.strategy ? query : {} })
+}
+
+// 目前選擇在這檔股票的回測統計與判定
+const selectedStats = computed(() =>
+  backtest.value?.results.find(
+    (r) => r.strategy.code === selectedStrategy.value?.code && r.exitRule === selectedExitRule.value?.code,
+  ),
+)
+const selectedVerdict = computed(() => selectedStats.value && verdict(selectedStats.value))
+
+const trades = ref([])
+const tradesError = ref('')
+let latestTrades = 0
+
+async function loadTrades() {
+  const request = ++latestTrades
+  trades.value = []
+  tradesError.value = ''
+  if (!selectedStrategy.value || !selectedExitRule.value) return
+  try {
+    const data = await fetchTrades(props.symbol, selectedStrategy.value.code, selectedExitRule.value.code)
+    if (request === latestTrades) trades.value = data.trades
+  } catch (err) {
+    if (request === latestTrades) tradesError.value = err.message
+  }
+}
+watch([() => props.symbol, selectedStrategy, selectedExitRule], loadTrades, { immediate: true })
+
+// 圖表只有最近一年；列表由新到舊列出全部交易
+const chartStart = computed(() => history.value?.prices[0]?.tradeDate)
+const tradesOnChart = computed(
+  () => trades.value.filter((t) => chartStart.value && (t.exitDate ?? '9999') >= chartStart.value).length,
+)
+const tradesNewestFirst = computed(() => [...trades.value].reverse())
 
 // 最新一筆與前一交易日，用來顯示標題列的收盤價與漲跌
 const latest = computed(() => history.value?.prices.at(-1))
@@ -125,13 +204,98 @@ const changePercent = computed(() => {
           <button v-if="!isDefaultSettings" type="button" class="reset" @click="resetSettings">恢復預設</button>
         </div>
 
+        <div v-if="strategyOptions.length" class="indicator-toggles">
+          <fieldset>
+            <legend>回測進出場點</legend>
+            <select
+              aria-label="回測策略"
+              :value="selectedStrategy?.code ?? ''"
+              @change="selectBacktest({ strategy: $event.target.value || undefined })"
+            >
+              <option value="">不顯示</option>
+              <option v-for="strategy in strategyOptions" :key="strategy.code" :value="strategy.code">
+                {{ strategy.name }}
+              </option>
+            </select>
+            <select
+              aria-label="出場方式"
+              :value="selectedExitRule?.code"
+              :disabled="!selectedStrategy"
+              @change="selectBacktest({ exitRule: $event.target.value })"
+            >
+              <option v-for="rule in exitRuleOptions" :key="rule.code" :value="rule.code">{{ rule.name }}</option>
+            </select>
+          </fieldset>
+        </div>
+        <p v-else-if="backtestError" class="meta">回測進出場點：{{ backtestError }}</p>
+
         <CandlestickChart
           :prices="history.prices"
           :months="months"
           :ma-keys="maKeys"
           :sub-chart-keys="subChartKeys"
+          :trades="trades"
           @range-change="visibleRange = $event"
         />
+
+        <section v-if="selectedStrategy && selectedExitRule" id="backtest-trades" class="backtest">
+          <h2>回測交易：{{ selectedStrategy.name }} · {{ selectedExitRule.name }}</h2>
+          <p v-if="selectedStats" class="verdict-line" :class="selectedVerdict.key">
+            <strong>{{ selectedVerdict.key === 'edge' ? '★ ' : '' }}{{ history.name }}：{{ selectedVerdict.label }}</strong>
+            — {{ selectedStats.trades }} 筆，勝率 {{ formatRate(selectedStats.winRate, { digits: 1, signed: false }) }}，平均報酬
+            <span :class="trendClass(selectedStats.avgReturn)">{{ formatRate(selectedStats.avgReturn) }}</span>，每筆超額報酬
+            <span :class="trendClass(selectedStats.excessReturn)">{{ formatRate(selectedStats.excessReturn) }}</span>（95% 區間
+            {{ formatRate(selectedStats.excessLow) }} ~ {{ formatRate(selectedStats.excessHigh) }}）。{{ selectedVerdict.reason }}
+          </p>
+          <p class="meta">
+            {{ selectedExitRule.description }}。圖中
+            <span :style="{ color: TRADE_COLORS.entry }">▲ 進場</span>（訊號隔一個交易日開盤）、<span
+              :style="{ color: TRADE_COLORS.exit }"
+              >▼ 出場</span
+            >；底色紅為獲利、綠為虧損、藍為持有中，滑鼠移到 K 線上可看細節。圖表只涵蓋最近一年（{{ tradesOnChart }} 筆），全部交易列在下方。
+            <RouterLink
+              :to="{ name: 'screener', query: { strategy: selectedStrategy.code, scope: symbol }, hash: '#backtest' }"
+              >各出場方式比較</RouterLink
+            >
+          </p>
+          <p v-if="tradesError" class="status error">{{ tradesError }}</p>
+          <details v-else-if="trades.length">
+            <summary>全部 {{ trades.length }} 筆交易（由新到舊）</summary>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <!-- 報酬放在前面：手機上表格需左右滑動，最重要的欄位不用滑就看得到 -->
+                  <tr>
+                    <th>進場（開盤）</th>
+                    <th>出場</th>
+                    <th class="num">報酬</th>
+                    <th class="num">持有</th>
+                    <th>出場原因</th>
+                    <th class="num">股利</th>
+                    <th>訊號日</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="trade in tradesNewestFirst" :key="trade.entryDate">
+                    <td>{{ trade.entryDate }}<span class="price-cell">{{ formatPrice(trade.entryPrice) }}</span></td>
+                    <td>
+                      <template v-if="trade.exitDate">
+                        {{ trade.exitDate }}<span class="price-cell">{{ formatPrice(trade.exitPrice) }}</span>
+                      </template>
+                      <template v-else>持有中</template>
+                    </td>
+                    <td class="num" :class="trendClass(trade.netReturn)">{{ formatRate(trade.netReturn) }}</td>
+                    <td class="num">{{ trade.holdingDays }} 日</td>
+                    <td>{{ trade.exitReason ? EXIT_REASONS[trade.exitReason] ?? trade.exitReason : '—' }}</td>
+                    <td class="num">{{ trade.dividends > 0 ? formatPrice(trade.dividends) : '—' }}</td>
+                    <td>{{ trade.signalDate }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </details>
+          <p v-else class="meta">這個組合在回測期間沒有交易。</p>
+        </section>
 
         <!-- 中文句子之間不換行：模板換行會變成一個空白 -->
         <p class="note">
@@ -250,5 +414,76 @@ const changePercent = computed(() => {
 .note {
   color: #666;
   font-size: 13px;
+}
+
+select {
+  padding: 3px 6px;
+  font-size: 14px;
+}
+
+.backtest h2 {
+  margin: 16px 0 4px;
+  font-size: 16px;
+}
+
+.verdict-line {
+  margin: 4px 0;
+  padding: 8px 12px;
+  border-left: 4px solid #adb5bd;
+  border-radius: 4px;
+  background: #f6f8fa;
+  font-size: 14px;
+}
+
+.verdict-line.edge {
+  border-left-color: #d97706;
+  background: #fff8e6;
+}
+
+summary {
+  color: #0b57d0;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  margin-top: 6px;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+th,
+td {
+  padding: 4px 8px;
+  border-bottom: 1px solid #e5e7eb;
+  text-align: left;
+  white-space: nowrap;
+}
+
+thead th {
+  background: #f6f8fa;
+}
+
+.num {
+  text-align: right;
+}
+
+.price-cell {
+  margin-left: 6px;
+  color: #555;
+}
+
+/* 手機：價格換到日期下一行，讓進場、出場、報酬、持有不用左右滑動就看得到 */
+@media (max-width: 640px) {
+  .price-cell {
+    display: block;
+    margin-left: 0;
+  }
 }
 </style>

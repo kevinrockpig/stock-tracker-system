@@ -66,3 +66,14 @@ export function fetchScreener(strategy, days) {
   const params = new URLSearchParams({ strategy, days: String(days) })
   return getJson(`/api/screener?${params}`)
 }
+
+// 策略回測統計：scope 為 ALL（觀察名單合併）或股票代號
+export function fetchBacktests(scope = 'ALL') {
+  return getJson(`/api/backtests?${new URLSearchParams({ scope })}`)
+}
+
+// 某檔股票在某策略、某出場規則下的歷史回測交易（依進場日由舊到新）
+export function fetchTrades(symbol, strategy, exitRule) {
+  const params = new URLSearchParams({ strategy, exitRule })
+  return getJson(`/api/stocks/${encodeURIComponent(symbol)}/trades?${params}`)
+}

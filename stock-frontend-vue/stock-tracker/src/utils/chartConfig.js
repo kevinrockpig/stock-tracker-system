@@ -59,3 +59,12 @@ export const CHART_RANGES = [
 export const DEFAULT_MONTHS = 3
 export const DEFAULT_MA_KEYS = MA_LINES.map((ma) => ma.key)
 export const DEFAULT_SUB_CHART_KEYS = ['macd', 'rsi']
+
+// 回測進出場點：進場 ▲ 標在當天最低價下方、出場 ▼ 標在最高價上方；持有期間的底色依報酬區分
+export const TRADE_COLORS = {
+  entry: '#0b57d0',
+  exit: '#7048e8',
+  win: 'rgba(209, 36, 47, 0.10)',
+  loss: 'rgba(26, 127, 55, 0.12)',
+  open: 'rgba(11, 87, 208, 0.08)',
+}

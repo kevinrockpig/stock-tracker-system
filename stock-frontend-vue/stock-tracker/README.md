@@ -5,11 +5,22 @@
 | 頁面 | 網址 | 使用的 API |
 |---|---|---|
 | 股票清單 | `/` | `GET /api/stocks` |
-| 個股 K 線圖 | `/stocks/2330.TW` | `GET /api/stocks/{symbol}/history?from=…` |
-| 策略選股 | `/screener?strategy=golden_cross&days=10` | `GET /api/strategies`、`GET /api/screener?strategy=…&days=…` |
+| 個股 K 線圖 | `/stocks/2330.TW?strategy=ma_bullish&exitRule=hold_5` | `GET /api/stocks/{symbol}/history?from=…`、`GET /api/backtests?scope={symbol}`、`GET /api/stocks/{symbol}/trades?strategy=…&exitRule=…` |
+| 策略選股 | `/screener?strategy=golden_cross&days=10&scope=2330.TW` | `GET /api/strategies`、`GET /api/screener?strategy=…&days=…`、`GET /api/stocks`、`GET /api/backtests?scope=…` |
+| 使用說明 | `/about#backtest` | `GET /api/strategies`、`GET /api/backtests` |
 
 策略選股頁：選擇策略（均線多頭排列 / MACD 黃金交叉 / 突破 20 日均線）與區間（最新交易日 / 近 5、10、20 個交易日），
-以卡片顯示符合的股票，點卡片進入 K 線圖。選擇記錄在網址上，可分享、可用上一頁返回。
+以卡片顯示符合的股票，點卡片進入 K 線圖（預先標出這個策略的歷史進出場點）。選擇記錄在網址上，可分享、可用上一頁返回。
+
+回測結果（資料由 Python 每日計算，前端只負責顯示）：
+
+- 策略選股頁：策略說明下方一句話摘要（全部合併的結果中哪些出場方式有優勢），下方「歷史回測」區塊以 4 張卡片
+  比較 4 種出場方式：判定（歷史上有優勢 / 無明顯優勢）與原因、每筆超額報酬與 95% 區間、勝率與平均報酬（附任意日進場基準）、
+  前後兩段超額報酬，「更多統計」可展開。可切換「全部合併」或單一股票（`scope`），單一股票的卡片可連到 K 線圖查看每筆交易。
+  並提醒同時比較多組的運氣成分。
+- 個股頁：「回測進出場點」選擇策略與出場方式（記錄在網址，預設不顯示），K 線圖標出 ▲ 進場、▼ 出場，
+  持有期間底色紅為獲利、綠為虧損、藍為持有中，tooltip 顯示交易細節；下方顯示這檔股票的判定與全部交易清單。
+- 判定文字與說明頁的成本數字集中在 `src/utils/backtest.js`（數字須與 Python 的 `scraper/backtest.py` 一致）。
 
 K 線圖使用 ECharts（類別軸，只排列交易日；休市日不留空白），支援 1 個月 / 3 個月 / 6 個月 / 1 年區間、滑鼠滾輪縮放與下方滑桿。
 成交量單位為「張」（1 張 = 1,000 股）。
@@ -21,7 +32,7 @@ K 線圖使用 ECharts（類別軸，只排列交易日；休市日不留空白�
 - 指標顏色與副圖設定集中在 `src/utils/chartConfig.js`
 - 區間與指標的選擇存在瀏覽器的 localStorage（`src/utils/chartSettings.js`），所有個股共用，重新整理後沿用；可按「恢復預設」
 
-使用說明頁（`/about`）：免責聲明、資料性質、指標計算方式與常見解讀、策略條件（取自 API）、資料來源。
+使用說明頁（`/about`）：免責聲明、資料性質、指標計算方式與常見解讀、策略條件（取自 API）、回測方法與限制、資料來源。
 每頁頁尾有免責聲明連結；個股頁與策略選股頁的說明文字也連到對應段落（例如 `/about#indicators`）。
 
 導覽：導覽列固定在頂端；說明頁目錄固定（桌面為左側欄、手機為導覽列下方橫列）並標示目前段落；捲動超過約一個畫面高時出現「回到頂端」按鈕；
