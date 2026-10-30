@@ -89,3 +89,27 @@ def test_signal_set_contains_only_matches():
     day = inputs["trade_date"][1]
     assert to_signal_set(result) == {(day, "golden_cross"), (day, "break_ma20")}
     assert set(result.columns) - {"trade_date"} == set(STRATEGIES)
+
+
+def test_high_120_needs_full_window_and_beats_prior_high():
+    closes = [100.0] * 120 + [100.0, 101.0, 100.5, 102.0]
+    result = evaluate_strategies(make_inputs(len(closes), close_price=closes))
+    # 第 120 天收盤 = 前 120 天最高（不算新高）；121、123 天創新高；前 120 天資料不足不判斷
+    assert matched_days(result, "high_120") == [121, 123]
+
+
+def test_ma20_cross_ma60_only_on_crossing_day():
+    inputs = make_inputs(5, ma20=[9, 10, 11, 12, 9], ma60=[10, 10, 10, 10, 10])
+    assert matched_days(evaluate_strategies(inputs), "ma20_cross_ma60") == [2]
+
+
+def test_golden_cross_trend_requires_close_above_rising_ma60():
+    n = 25
+    dif = [-1.0] * n
+    dif[21] = dif[22] = dif[24] = 1.0  # 第 21、24 天黃金交叉
+    ma60 = [100.0] * n
+    ma60[21], ma60[24] = 101.0, 99.0  # 第 21 天季線比 20 天前高；第 24 天比 20 天前低
+    inputs = make_inputs(n, close_price=[105.0] * n, ma60=ma60, macd_dif=dif, macd_signal=[0.0] * n)
+    result = evaluate_strategies(inputs)
+    assert matched_days(result, "golden_cross") == [21, 24]
+    assert matched_days(result, "golden_cross_trend") == [21]

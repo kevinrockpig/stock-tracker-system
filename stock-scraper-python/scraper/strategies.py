@@ -11,7 +11,17 @@ STRATEGIES = {
     "ma_bullish": "均線多頭排列",
     "golden_cross": "MACD 黃金交叉",
     "break_ma20": "突破 20 日均線",
+    # 波段策略（2026-10-30 新增）：只搭配波段出場規則回測，見 SWING_STRATEGIES
+    "high_120": "創 120 日新高",
+    "ma20_cross_ma60": "月線穿越季線",
+    "golden_cross_trend": "季線上揚時 MACD 黃金交叉",
 }
+
+# 波段策略：訊號本身針對數週到數月的趨勢，只搭配波段出場規則（backtest.EXIT_RULES 中 horizon = swing）回測。
+# 參數事先決定、不做最佳化：120 日約半年；季線上揚以「比 20 個交易日前高」判斷，避免每天的小波動
+SWING_STRATEGIES = {"high_120", "ma20_cross_ma60", "golden_cross_trend"}
+NEW_HIGH_DAYS = 120
+TREND_LOOKBACK_DAYS = 20
 
 # 狀態型策略：條件成立期間每天都符合（例如多頭排列可連續數十天）；回測只把「進入狀態的第一天」當作進場訊號。
 # 其餘為事件型（交叉、突破），只在發生當天成立
@@ -33,6 +43,15 @@ def evaluate_strategies(data: pd.DataFrame) -> pd.DataFrame:
     result["golden_cross"] = (dif > signal) & (dif.shift(1) <= signal.shift(1))
     # 突破 20 日均線：收盤價由下往上穿越 MA20，只在突破當天成立
     result["break_ma20"] = (close > ma20) & (close.shift(1) <= ma20.shift(1))
+    # 創 120 日新高：收盤價高於前 120 個交易日的最高收盤價（前面不足 120 天時不判斷）；創新高的每一天都成立
+    prior_high = close.shift(1).rolling(NEW_HIGH_DAYS, min_periods=NEW_HIGH_DAYS).max()
+    result["high_120"] = close > prior_high
+    # 月線穿越季線：MA20 由下往上穿越 MA60，只在穿越當天成立
+    result["ma20_cross_ma60"] = (ma20 > ma60) & (ma20.shift(1) <= ma60.shift(1))
+    # 季線上揚時 MACD 黃金交叉（趨勢濾網 + 進場觸發）：黃金交叉當天，收盤在季線之上，且季線比 20 個交易日前高
+    result["golden_cross_trend"] = (
+        result["golden_cross"] & (close > ma60) & (ma60 > ma60.shift(TREND_LOOKBACK_DAYS))
+    )
     # 與 NaN 比較的結果皆為 False，因此資料不足的日子不會被誤判為符合
     return result
 

@@ -155,7 +155,7 @@ backtest_trades = Table(
     Column("entry_price", Numeric(12, 4), nullable=False),
     Column("exit_date", Date),  # NULL：仍持有中
     Column("exit_price", Numeric(12, 4)),
-    Column("exit_reason", String(10)),  # hold：持有期滿 / trailing：移動停利 / max_hold：移動停利達最長天數
+    Column("exit_reason", String(10)),  # hold：持有期滿 / trailing：移動停利 / max_hold：達最長天數 / ma_break：跌破季線
     Column("dividends", Numeric(12, 4), nullable=False),  # 持有期間領到的每股現金股利
     Column("holding_days", Integer, nullable=False),  # 持有的交易日數（含進場日與出場日）
     Column("net_return", Numeric(12, 6)),  # 扣成本、含股利的報酬率（0.05 = 5%）；持有中為 NULL
@@ -179,6 +179,8 @@ STAT_VALUE_COLUMNS = (
     "excess_return", "excess_low", "excess_high",
     "split_date", "trades_first", "excess_first", "trades_second", "excess_second",
     "has_edge",
+    # 資金曲線（見 backtest.py）：策略的累積報酬、年化報酬、最大回撤、在場時間比例，以及同期買進持有的年化報酬與最大回撤
+    "total_return", "cagr", "max_drawdown", "exposure", "bh_cagr", "bh_max_drawdown",
 )
 _INTEGER_STATS = {"trades", "open_trades", "wins", "max_consecutive_losses", "baseline_trades"}
 _NULLABLE_INTEGER_STATS = {"trades_first", "trades_second"}  # 後來新增的欄位允許 NULL，既有資料表才能自動補上

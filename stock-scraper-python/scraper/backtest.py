@@ -5,11 +5,21 @@
 規則固定、不做參數最佳化（只有 4 檔、約 11 年的資料，自動挑出的「最佳參數」多半是巧合）：
 - 進場：訊號是用收盤價算的，收盤後才知道 → 下一個交易日開盤價買進。
   開盤漲幅已達 LIMIT_UP_SKIP 以上（接近漲停）視為買不到，略過這次訊號
-- 出場：EXIT_RULES，各自獨立統計（持有 N 個交易日於收盤賣出；或移動停利）
+- 出場：EXIT_RULES，各自獨立統計，分成兩組（horizon）：
+  短線 short：持有 5 / 10 / 20 個交易日於收盤賣出；移動停利（最長 60 日）
+  波段 swing：跌破季線（MA60）隔日開盤賣出；移動停利不設最長天數
+  原本的 3 個策略兩組都回測；波段策略（strategies.SWING_STRATEGIES）只回測波段組。
+  「同時比較的組數」以組為單位計算（各 12 組），兩組回答的是不同問題
+- 跌破季線出場的基準依「訊號日收盤是否在季線之上」分層比較：任意日進場若當天已在季線之下，隔天就會被迫出場
+  （白付一次成本），會把基準拉低；而多頭排列、創新高等訊號出現時幾乎都在季線之上，天生避開這種情況。
+  不分層時這類訊號會出現「假的優勢」（2026-10-30 實測：兩組因此被誤判為有優勢），因此只和同一層的任意日進場比較
 - 同一股票、同一策略、同一出場規則同時只持有一筆：持有期間出現的新訊號不進場
 - 狀態型策略（strategies.STATE_STRATEGIES）只把「進入狀態的第一天」當作訊號
 - 成本：一般台股費率，買賣手續費各 0.1425%（不打折），賣出證交稅股票 0.3%、ETF 0.1%
 - 報酬含現金股利：除息日在「進場日之後、出場日當天或之前」的股利計入（進場當天才除息則已領不到）
+- 資金曲線（波段評估用）：每個（策略, 股票, 出場規則）以 1 元起算，持有期間依收盤價逐日計值、空手時不變，
+  最新一天仍持有則以當天收盤扣除賣出成本計值；由此算出累積報酬、年化報酬、最大回撤與在場時間，
+  並與同期間買進持有比較。合併範圍為各股票各分配等額資金（不再平衡）的平均資金曲線
 - 基準：同一檔股票「任意一個交易日」都依相同規則進場的平均結果（可重疊）。
   超額報酬 = 每筆交易報酬 − 同一檔股票的基準平均。「有優勢」（has_edge）需同時符合：
   1. 超額報酬的 95% 信賴區間下限 > 0
@@ -46,7 +56,7 @@ from scraper.db import (
     sync_backtest_stats,
     sync_backtest_trades,
 )
-from scraper.strategies import STATE_STRATEGIES, STRATEGIES
+from scraper.strategies import STATE_STRATEGIES, STRATEGIES, SWING_STRATEGIES
 
 logger = logging.getLogger(__name__)
 
@@ -57,14 +67,18 @@ SELL_TAX_ETF = 0.001
 LIMIT_UP_SKIP = 0.095  # 漲跌幅上限 10%，考慮升降單位的進位，9.5% 以上視為已漲停
 TRAILING_ATR_MULTIPLE = 3.0
 TRAILING_MAX_DAYS = 60
+SHORT, SWING = "short", "swing"
+ALL_STRATA = "all"  # 基準不分層
 
 
 @dataclass(frozen=True)
 class ExitRule:
     label: str
+    horizon: str = SHORT  # short 短線 / swing 波段
     hold_days: int | None = None  # 持有 N 個交易日（含進場日），第 N 天收盤賣出
     trailing_atr: float | None = None  # 移動停利：進場後最高收盤價 − 倍數 × ATR(14)；收盤跌破則隔日開盤賣出
-    max_days: int | None = None  # 移動停利最長持有天數，到期於收盤賣出
+    max_days: int | None = None  # 最長持有天數，到期於收盤賣出；None 為不設上限
+    below_ma60: bool = False  # 收盤跌破季線（MA60）則隔日開盤賣出
 
 
 EXIT_RULES = {
@@ -75,7 +89,19 @@ EXIT_RULES = {
         f"移動停利（{TRAILING_ATR_MULTIPLE:g} × ATR，最長 {TRAILING_MAX_DAYS} 日）",
         trailing_atr=TRAILING_ATR_MULTIPLE, max_days=TRAILING_MAX_DAYS,
     ),
+    "ma60_exit": ExitRule("跌破季線出場", horizon=SWING, below_ma60=True),
+    "trailing_nocap": ExitRule(
+        f"移動停利（{TRAILING_ATR_MULTIPLE:g} × ATR，不設上限）", horizon=SWING, trailing_atr=TRAILING_ATR_MULTIPLE,
+    ),
 }
+
+
+def rules_for(strategy: str) -> dict[str, ExitRule]:
+    """這個策略要回測的出場規則：波段策略只搭配波段組。"""
+    return {
+        code: rule for code, rule in EXIT_RULES.items()
+        if strategy not in SWING_STRATEGIES or rule.horizon == SWING
+    }
 
 
 @dataclass
@@ -85,6 +111,7 @@ class Bars:
     open: list[float]
     close: list[float]
     atr: list[float]  # 暖身期為 NaN
+    ma60: list[float]  # 暖身期為 NaN
     dividends: dict  # 除息日 → 每股現金股利（與價格同一基準）
     is_etf: bool
     start: int  # 回測起點：指標暖身完成、所有策略都能判斷的第一天
@@ -97,10 +124,12 @@ class Trade:
     entry_price: float
     exit_date: date | None  # None：仍持有中（資料到最新一天還沒出場）
     exit_price: float | None
-    exit_reason: str | None  # hold / trailing / max_hold
+    exit_reason: str | None  # hold / trailing / max_hold / ma_break
     dividends: float
     holding_days: int
     net_return: float | None
+    # 基準分層：跌破季線出場的規則記錄訊號日收盤是否在季線之上（見模組說明）；其他規則為 None（不分層）
+    stratum: bool | None = None
 
 
 def is_etf(symbol: str) -> bool:
@@ -136,24 +165,36 @@ def simulate(bars: Bars, signal_index: int, rule: ExitRule) -> Trade | None:
         highest = -math.inf
         for i in range(entry, last + 1):
             highest = max(highest, bars.close[i])
-            if i - entry + 1 >= rule.max_days:
+            if rule.max_days and i - entry + 1 >= rule.max_days:
                 exit_index, exit_price, reason = i, bars.close[i], "max_hold"
                 break
-            atr = bars.atr[i]
-            if not math.isnan(atr) and bars.close[i] < highest - rule.trailing_atr * atr:
+            broken = None
+            if rule.trailing_atr:
+                atr = bars.atr[i]
+                if not math.isnan(atr) and bars.close[i] < highest - rule.trailing_atr * atr:
+                    broken = "trailing"
+            if rule.below_ma60 and not math.isnan(bars.ma60[i]) and bars.close[i] < bars.ma60[i]:
+                broken = "ma_break"
+            if broken:
                 if i + 1 <= last:
-                    exit_index, exit_price, reason = i + 1, bars.open[i + 1], "trailing"
+                    exit_index, exit_price, reason = i + 1, bars.open[i + 1], broken
                 break  # 最新一天才跌破：明天開盤才會賣出，目前仍持有
 
     entry_date = bars.dates[entry]
+    stratum = None
+    if rule.below_ma60:
+        ma60 = bars.ma60[signal_index]
+        stratum = bool(not math.isnan(ma60) and bars.close[signal_index] > ma60)
     if exit_index is None:
-        return Trade(bars.dates[signal_index], entry_date, bars.open[entry], None, None, None, 0.0, last - entry + 1, None)
+        return Trade(
+            bars.dates[signal_index], entry_date, bars.open[entry], None, None, None, 0.0, last - entry + 1, None, stratum,
+        )
 
     exit_date = bars.dates[exit_index]
     dividends = sum(amount for day, amount in bars.dividends.items() if entry_date < day <= exit_date)
     return Trade(
         bars.dates[signal_index], entry_date, bars.open[entry], exit_date, exit_price, reason,
-        dividends, exit_index - entry + 1, net_return(bars.open[entry], exit_price, dividends, bars.is_etf),
+        dividends, exit_index - entry + 1, net_return(bars.open[entry], exit_price, dividends, bars.is_etf), stratum,
     )
 
 
@@ -179,14 +220,30 @@ def run_strategy(bars: Bars, signal_indexes: list[int], strategy: str, rule: Exi
     return trades
 
 
-def baseline_returns(bars: Bars, rule: ExitRule) -> list[tuple[date, float]]:
-    """任意一天都以相同規則進場（可重疊）的（進場日, 報酬），代表「不看訊號」的表現。"""
+def baseline_returns(bars: Bars, rule: ExitRule) -> list[tuple[date, float, bool | None]]:
+    """任意一天都以相同規則進場（可重疊）的（進場日, 報酬, 分層），代表「不看訊號」的表現。"""
     returns = []
     for i in range(bars.start, len(bars.dates) - 1):
         trade = simulate(bars, i, rule)
         if trade is not None and trade.net_return is not None:
-            returns.append((trade.entry_date, trade.net_return))
+            returns.append((trade.entry_date, trade.net_return, trade.stratum))
     return returns
+
+
+def baseline_lookup(baselines: dict, include=lambda entry_date: True) -> dict:
+    """（股票, 分層）→（平均報酬, 勝率）；分層 ALL_STRATA 為該股票不分層的全部基準。只計入 include(進場日) 為真的基準。"""
+    groups = {}
+    for symbol, items in baselines.items():
+        for entry_date, r, stratum in items:
+            if include(entry_date):
+                groups.setdefault((symbol, stratum), []).append(r)
+                groups.setdefault((symbol, ALL_STRATA), []).append(r)
+    return {key: (statistics.fmean(rs), sum(r > 0 for r in rs) / len(rs)) for key, rs in groups.items()}
+
+
+def trade_baseline(lookup: dict, trade: Trade, symbol: str) -> tuple[float, float] | None:
+    """這筆交易要比較的基準：同一檔股票、同一分層；該分層沒有基準時退回不分層。"""
+    return lookup.get((symbol, trade.stratum)) or lookup.get((symbol, ALL_STRATA))
 
 
 def buy_and_hold_return(bars: Bars) -> float | None:
@@ -197,6 +254,89 @@ def buy_and_hold_return(bars: Bars) -> float | None:
     entry_date, last_date = bars.dates[entry], bars.dates[-1]
     dividends = sum(amount for day, amount in bars.dividends.items() if entry_date < day <= last_date)
     return net_return(bars.open[entry], bars.close[-1], dividends, bars.is_etf)
+
+
+def equity_curve(bars: Bars, trades: list[Trade]) -> list[float]:
+    """資金曲線：bars.start 到最新一天每個交易日收盤後的資金（起始 1 元）。
+
+    持有期間以收盤價計值（加上已入帳的股利）；出場日為賣出所得；空手時不變。
+    最新一天仍持有則以當天收盤扣除賣出成本計值，與 buy_and_hold_return 一致。
+    """
+    index_of = {day: i for i, day in enumerate(bars.dates)}
+    last = len(bars.dates) - 1
+    sell_cost = SELL_FEE + (SELL_TAX_ETF if bars.is_etf else SELL_TAX_STOCK)
+    values = [1.0] * (last + 1)
+    cash = 1.0
+    cursor = bars.start
+    for trade in sorted(trades, key=lambda t: t.entry_date):
+        entry = index_of[trade.entry_date]
+        for i in range(cursor, entry):
+            values[i] = cash
+        exit_index = last if trade.exit_date is None else index_of[trade.exit_date]
+        shares = cash / (trade.entry_price * (1 + BUY_FEE))
+        received = 0.0
+        for i in range(entry, exit_index + 1):
+            received += bars.dividends.get(bars.dates[i], 0.0) if i > entry else 0.0
+            values[i] = shares * (bars.close[i] + received)
+        if trade.exit_date is None:
+            values[last] = shares * (bars.close[last] * (1 - sell_cost) + received)
+        else:
+            values[exit_index] = cash = cash * (1 + trade.net_return)
+        cursor = exit_index + 1
+    for i in range(cursor, last + 1):
+        values[i] = cash
+    return values[bars.start:]
+
+
+def buy_and_hold_curve(bars: Bars) -> list[float]:
+    """買進持有的資金曲線：回測起點隔天開盤買進（與 buy_and_hold_return 相同），起點當天為 1 元。"""
+    entry = bars.start + 1
+    if entry >= len(bars.dates):
+        return [1.0] * (len(bars.dates) - bars.start)
+    hold = Trade(bars.dates[bars.start], bars.dates[entry], bars.open[entry], None, None, None, 0.0, 0, None)
+    return equity_curve(bars, [hold])
+
+
+def curve_metrics(dates: list[date], values: list[float], in_market: list[bool] | None = None) -> dict:
+    """累積報酬、年化報酬（以日曆日計）、最大回撤，以及在場時間比例（有提供 in_market 時）。"""
+    if len(values) < 2:
+        return {"total_return": None, "cagr": None, "max_drawdown": None, "exposure": None}
+    years = (dates[-1] - dates[0]).days / 365.25
+    peak, drawdown = values[0], 0.0
+    for v in values:
+        peak = max(peak, v)
+        drawdown = min(drawdown, v / peak - 1)
+    return {
+        "total_return": values[-1] - 1,
+        "cagr": values[-1] ** (1 / years) - 1 if years > 0 and values[-1] > 0 else None,
+        "max_drawdown": drawdown,
+        "exposure": sum(in_market) / len(in_market) if in_market else None,
+    }
+
+
+def in_market_days(bars: Bars, trades: list[Trade]) -> list[bool]:
+    """bars.start 起每個交易日收盤時是否持有（進場日到出場前一天；收盤出場的當天收盤已不持有）。"""
+    index_of = {day: i for i, day in enumerate(bars.dates)}
+    flags = [False] * len(bars.dates)
+    for t in trades:
+        entry = index_of[t.entry_date]
+        end = len(bars.dates) if t.exit_date is None else index_of[t.exit_date]
+        for i in range(entry, end):
+            flags[i] = True
+    return flags[bars.start:]
+
+
+def combined_curve(curves: list[tuple[list[date], list[float]]]) -> tuple[list[date], list[float]]:
+    """等額資金分給每檔股票（不再平衡）的合併資金曲線：日期取聯集，某檔沒有資料的日子沿用前一天的資金。"""
+    days = sorted({d for dates, _ in curves for d in dates})
+    total = [0.0] * len(days)
+    for dates, values in curves:
+        value_on = dict(zip(dates, values))
+        current = 1.0  # 這檔的回測起點之前視為現金
+        for k, day in enumerate(days):
+            current = value_on.get(day, current)
+            total[k] += current
+    return days, [v / len(curves) for v in total]
 
 
 def wilson_interval(wins: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -224,23 +364,23 @@ def split_excess(closed: list[tuple[Trade, str]], baselines: dict, split_date: d
     """前後兩段各自的超額報酬：進場日在 split_date 之前為前段；每段都與同一檔股票「同一段」的任意日進場比較。"""
     result = {}
     for half, in_half in (("first", lambda d: d < split_date), ("second", lambda d: d >= split_date)):
-        base = {s: _mean_or_none(r for d, r in items if in_half(d)) for s, items in baselines.items()}
-        excess = [t.net_return - base[s] for t, s in closed if in_half(t.entry_date) and base[s] is not None]
+        lookup = baseline_lookup(baselines, in_half)
+        excess = [
+            t.net_return - base[0] for t, s in closed
+            if in_half(t.entry_date) and (base := trade_baseline(lookup, t, s)) is not None
+        ]
         result[f"trades_{half}"] = len(excess)
         result[f"excess_{half}"] = _mean_or_none(excess)
     return result
 
 
 def summarize(trades_by_symbol: dict[str, list[Trade]], baselines: dict[str, list], split_date: date | None = None) -> dict:
-    """交易統計。trades_by_symbol：股票 → 交易；baselines：股票 → 任意日進場的（進場日, 報酬），同一出場規則。
+    """交易統計。trades_by_symbol：股票 → 交易；baselines：股票 → 任意日進場的（進場日, 報酬, 分層），同一出場規則。
 
-    基準與超額報酬都和「同一檔股票」比較：合併統計時，訊號集中在哪幾檔不會影響比較的公平性。
+    基準與超額報酬都和「同一檔股票」（及同一分層）比較：合併統計時，訊號集中在哪幾檔不會影響比較的公平性。
     split_date 有值時另外計算前後兩段的超額報酬，並作為「有優勢」的穩健性條件。
     """
-    base = {
-        s: (statistics.fmean(r for _, r in items), sum(r > 0 for _, r in items) / len(items))
-        for s, items in baselines.items() if items
-    }
+    lookup = baseline_lookup(baselines)
     pairs = sorted(((t, s) for s, items in trades_by_symbol.items() for t in items), key=lambda p: p[0].entry_date)
     closed = [(t, s) for t, s in pairs if t.net_return is not None]
     returns = [t.net_return for t, _ in closed]
@@ -253,13 +393,14 @@ def summarize(trades_by_symbol: dict[str, list[Trade]], baselines: dict[str, lis
         streak = streak + 1 if r <= 0 else 0
         longest = max(longest, streak)
 
-    excess = [t.net_return - base[s][0] for t, s in closed]
+    bases = [trade_baseline(lookup, t, s) for t, s in closed]
+    excess = [t.net_return - base[0] for (t, _), base in zip(closed, bases)]
     excess_low = excess_high = None
     if len(excess) >= 2:
         half = t_critical(len(excess) - 1) * statistics.stdev(excess) / math.sqrt(len(excess))
         excess_low, excess_high = statistics.fmean(excess) - half, statistics.fmean(excess) + half
 
-    all_baseline = [r for items in baselines.values() for _, r in items]
+    all_baseline = [r for items in baselines.values() for _, r, _ in items]
     halves = split_excess(closed, baselines, split_date) if split_date else {}
     robust = not split_date or all((halves[k] or 0) > 0 for k in ("excess_first", "excess_second"))
     avg_win = statistics.fmean(wins) if wins else None
@@ -283,11 +424,11 @@ def summarize(trades_by_symbol: dict[str, list[Trade]], baselines: dict[str, lis
         "baseline_trades": len(all_baseline),
         # 有交易時依交易所屬股票加權（與超額報酬一致：平均報酬 − 基準平均 = 超額報酬）；沒有交易時為全部基準的平均
         "baseline_avg_return": (
-            statistics.fmean(base[s][0] for _, s in closed) if closed
+            statistics.fmean(base[0] for base in bases) if closed
             else statistics.fmean(all_baseline) if all_baseline else None
         ),
         "baseline_win_rate": (
-            statistics.fmean(base[s][1] for _, s in closed) if closed
+            statistics.fmean(base[1] for base in bases) if closed
             else sum(r > 0 for r in all_baseline) / len(all_baseline) if all_baseline else None
         ),
         "excess_return": statistics.fmean(excess) if excess else None,
@@ -312,6 +453,7 @@ def make_bars(symbol: str, frame: pd.DataFrame, dividends: dict) -> Bars:
         open=values["open_price"].tolist(),
         close=values["close_price"].tolist(),
         atr=values["atr14"].tolist(),
+        ma60=values["ma60"].tolist(),
         dividends={day: float(amount) for day, amount in dividends.items()},
         is_etf=is_etf(symbol),
         start=start,
@@ -332,7 +474,7 @@ def backtest_symbol(symbol: str, frame: pd.DataFrame, signals: dict, dividends: 
     trades = {}
     for strategy in STRATEGIES:
         indexes = [index_of[d] for d in signals.get(strategy, ()) if d in index_of]
-        for code, rule in EXIT_RULES.items():
+        for code, rule in rules_for(strategy).items():
             trades[(strategy, code)] = run_strategy(bars, indexes, strategy, rule)
     baselines = {code: baseline_returns(bars, rule) for code, rule in EXIT_RULES.items()}
     return SymbolResult(bars, trades, baselines)
@@ -352,7 +494,7 @@ def build_stats(results: dict[str, SymbolResult]) -> list[dict]:
     split_date = middle_trading_date(results)
     rows = []
     for strategy in STRATEGIES:
-        for code in EXIT_RULES:
+        for code in rules_for(strategy):
             scopes = {symbol: [symbol] for symbol in results}
             scopes[ALL_SCOPE] = list(results)
             for scope, symbols in scopes.items():
@@ -369,8 +511,34 @@ def build_stats(results: dict[str, SymbolResult]) -> list[dict]:
                     **summarize(trades, baselines, split_date),
                     # 合併範圍為各股票買進持有報酬的平均（等權重）
                     "buy_hold_return": statistics.fmean(holds) if holds else None,
+                    **curve_stats([results[s] for s in symbols], strategy, code),
                 })
     return rows
+
+
+def curve_stats(results: list[SymbolResult], strategy: str, code: str) -> dict:
+    """資金曲線指標（策略與同期買進持有）；多檔時為等額資金的合併曲線，在場時間為各檔平均。"""
+    usable = [r for r in results if r.bars.start < len(r.bars.dates)]
+    if not usable:
+        return {}
+    curves, holds, exposures = [], [], []
+    for r in usable:
+        dates = r.bars.dates[r.bars.start:]
+        trades = r.trades[(strategy, code)]
+        curves.append((dates, equity_curve(r.bars, trades)))
+        holds.append((dates, buy_and_hold_curve(r.bars)))
+        flags = in_market_days(r.bars, trades)
+        exposures.append(sum(flags) / len(flags))
+    strategy_metrics = curve_metrics(*combined_curve(curves))
+    hold_metrics = curve_metrics(*combined_curve(holds))
+    return {
+        "total_return": strategy_metrics["total_return"],
+        "cagr": strategy_metrics["cagr"],
+        "max_drawdown": strategy_metrics["max_drawdown"],
+        "exposure": statistics.fmean(exposures),
+        "bh_cagr": hold_metrics["cagr"],
+        "bh_max_drawdown": hold_metrics["max_drawdown"],
+    }
 
 
 # ---------- 讀寫資料庫與執行 ----------
@@ -399,7 +567,7 @@ def to_stat_records(rows: list[dict]) -> list[dict]:
     for row in rows:
         record = {"strategy": row["strategy"], "scope": row["scope"], "exit_rule": row["exit_rule"]}
         for name in STAT_VALUE_COLUMNS:
-            value = row[name]
+            value = row.get(name)
             # 日期與次數原樣寫入，比率四捨五入到小數 6 位
             record[name] = value if isinstance(value, (date, int)) or value is None else _decimal(value, 6)
         records.append(record)
@@ -430,14 +598,20 @@ def _pct(value) -> str:
 
 
 def log_summary(stats: list[dict]) -> None:
-    """log 中列出全部股票合併的結果：交易次數、勝率、平均報酬、相對任意日進場的超額報酬（95% 區間）與是否有優勢。"""
-    rows = [r for r in stats if r["scope"] == ALL_SCOPE]
-    if not rows:
-        return
+    """log 中列出全部股票合併的結果：交易次數、勝率、平均報酬、相對任意日進場的超額報酬（95% 區間）與是否有優勢；
+    波段組另列資金曲線的年化報酬、最大回撤、在場時間，與買進持有比較。"""
+    for horizon, title in ((SHORT, "短線"), (SWING, "波段")):
+        rows = [r for r in stats if r["scope"] == ALL_SCOPE and EXIT_RULES[r["exit_rule"]].horizon == horizon]
+        if rows:
+            _log_group(title, rows)
+
+
+def _log_group(title: str, rows: list[dict]) -> None:
     logger.info(
-        "===== 策略回測（%s ~ %s，前後段以 %s 切分，全部股票合併，已扣成本含股利；同時比較 %d 組）=====",
-        rows[0]["period_start"], rows[0]["period_end"], rows[0]["split_date"], len(rows),
+        "===== 策略回測・%s（%s ~ %s，前後段以 %s 切分，全部股票合併，已扣成本含股利；同時比較 %d 組）=====",
+        title, rows[0]["period_start"], rows[0]["period_end"], rows[0]["split_date"], len(rows),
     )
+    logger.info("  買進持有（等額資金）：年化 %s 最大回撤 %s", _pct(rows[0].get("bh_cagr")), _pct(rows[0].get("bh_max_drawdown")))
     for r in rows:
         win = "—" if r["win_rate"] is None else (
             f"{r['win_rate'] * 100:.0f}%（{r['win_rate_low'] * 100:.0f}~{r['win_rate_high'] * 100:.0f}%）"
@@ -450,6 +624,11 @@ def log_summary(stats: list[dict]) -> None:
             STRATEGIES[r["strategy"]], EXIT_RULES[r["exit_rule"]].label, r["trades"], win,
             _pct(r["avg_return"]), _pct(r["baseline_avg_return"]), excess,
             _pct(r["excess_first"]), _pct(r["excess_second"]), "★有優勢" if r["has_edge"] else "無明顯優勢",
+        )
+        logger.info(
+            "  %-8s %-24s 資金曲線：年化 %s 最大回撤 %s 在場 %s",
+            "", "", _pct(r.get("cagr")), _pct(r.get("max_drawdown")),
+            "—" if r.get("exposure") is None else f"{r['exposure'] * 100:.0f}%",
         )
 
 

@@ -9,14 +9,22 @@ from scraper.backtest import (
     BUY_FEE,
     EXIT_RULES,
     SELL_FEE,
+    SWING,
     SELL_TAX_ETF,
     SELL_TAX_STOCK,
     Bars,
     ExitRule,
     Trade,
     baseline_returns,
+    buy_and_hold_curve,
+    buy_and_hold_return,
+    combined_curve,
+    curve_metrics,
     entry_signals,
+    equity_curve,
+    in_market_days,
     net_return,
+    rules_for,
     run_strategy,
     simulate,
     summarize,
@@ -27,11 +35,13 @@ from scraper.backtest import (
 DAY0 = date(2026, 1, 5)
 
 
-def bars(opens, closes, atr=1.0, dividends=None, etf=False, start=0):
+def bars(opens, closes, atr=1.0, dividends=None, etf=False, start=0, ma60=None):
     days = [DAY0 + timedelta(days=i) for i in range(len(closes))]
     return Bars(
         dates=days, open=list(map(float, opens)), close=list(map(float, closes)),
-        atr=[float(atr)] * len(closes), dividends={days[i]: d for i, d in (dividends or {}).items()},
+        atr=[float(atr)] * len(closes),
+        ma60=[math.nan] * len(closes) if ma60 is None else list(map(float, ma60)),
+        dividends={days[i]: d for i, d in (dividends or {}).items()},
         is_etf=etf, start=start,
     )
 
@@ -126,8 +136,8 @@ def test_state_strategy_only_enters_on_first_day():
 def test_baseline_enters_every_day():
     b = bars(opens=[10, 10, 10, 10, 10, 10], closes=[10, 10, 10, 10, 10, 10])
     returns = baseline_returns(b, HOLD_3)
-    assert [d for d, _ in returns] == b.dates[1:4]  # 訊號日 0、1、2 隔天進場且可完整持有 3 天；之後的還沒出場
-    assert all(r == pytest.approx(-0.00585, abs=1e-5) for _, r in returns)
+    assert [d for d, _, _ in returns] == b.dates[1:4]  # 訊號日 0、1、2 隔天進場且可完整持有 3 天；之後的還沒出場
+    assert all(r == pytest.approx(-0.00585, abs=1e-5) for _, r, _ in returns)
 
 
 def test_wilson_interval_known_value():
@@ -137,7 +147,7 @@ def test_wilson_interval_known_value():
 
 def base(*returns, day=0):
     """任意日進場的（進場日, 報酬）。"""
-    return [(DAY0 + timedelta(days=day), r) for r in returns]
+    return [(DAY0 + timedelta(days=day), r, None) for r in returns]
 
 
 def closed_trade(r, day=0, days=5):
@@ -205,4 +215,83 @@ def test_robustness_requires_both_halves_above_baseline():
 
 
 def test_exit_rules_are_fixed():
-    assert list(EXIT_RULES) == ["hold_5", "hold_10", "hold_20", "trailing_atr"]
+    assert list(EXIT_RULES) == ["hold_5", "hold_10", "hold_20", "trailing_atr", "ma60_exit", "trailing_nocap"]
+    assert [code for code, rule in EXIT_RULES.items() if rule.horizon == SWING] == ["ma60_exit", "trailing_nocap"]
+
+
+def test_swing_strategies_only_use_swing_exits():
+    assert list(rules_for("high_120")) == ["ma60_exit", "trailing_nocap"]
+    assert list(rules_for("golden_cross")) == list(EXIT_RULES)
+
+
+def test_ma60_exit_sells_next_open_after_close_below_ma60():
+    # 第 4 天收盤 9.5 跌破季線 10 → 第 5 天開盤 9.4 賣出
+    b = bars(opens=[10, 11, 12, 12, 10, 9.4, 9], closes=[11, 12, 13, 12, 9.5, 9, 9], ma60=[10] * 7)
+    t = simulate(b, 0, EXIT_RULES["ma60_exit"])
+    assert t.exit_reason == "ma_break" and t.exit_date == b.dates[5] and t.exit_price == 9.4 and t.holding_days == 5
+
+
+def test_ma60_exit_stays_open_when_breaking_on_last_day():
+    b = bars(opens=[10, 11, 12], closes=[11, 12, 9], ma60=[10, 10, 10])
+    assert simulate(b, 0, EXIT_RULES["ma60_exit"]).exit_date is None
+
+
+def test_trailing_without_cap_holds_beyond_60_days():
+    n = 130
+    b = bars(opens=[10 + i for i in range(n)], closes=[10.5 + i for i in range(n)])
+    capped = simulate(b, 0, EXIT_RULES["trailing_atr"])
+    assert capped.exit_reason == "max_hold" and capped.holding_days == 60
+    assert simulate(b, 0, EXIT_RULES["trailing_nocap"]).exit_date is None  # 一路上漲：不設上限就一直持有
+
+
+def test_equity_curve_compounds_trades_and_marks_open_position():
+    rule = ExitRule("持有 2 日", hold_days=2)
+    b = bars(opens=[10, 10, 10, 10, 10, 10, 10], closes=[10, 11, 12, 10, 10, 12, 13])
+    trades = run_strategy(b, [0, 3], "golden_cross", rule)  # 第 1~2 天、第 4~5 天
+    curve = equity_curve(b, trades)
+    first, second = trades[0].net_return, trades[1].net_return
+    assert curve[0] == 1.0  # 進場前是現金
+    assert curve[1] == pytest.approx(11 / (10 * (1 + BUY_FEE)))  # 持有中以收盤計值（未扣賣出成本）
+    assert curve[2] == pytest.approx(1 + first) and curve[3] == pytest.approx(1 + first)  # 出場後現金不變
+    assert curve[-1] == pytest.approx((1 + first) * (1 + second))
+    assert in_market_days(b, trades) == [False, True, False, False, True, False, False]
+
+
+def test_buy_and_hold_curve_matches_buy_and_hold_return():
+    b = bars(opens=[10, 10, 11, 12, 9], closes=[10, 11, 12, 9, 13], dividends={3: 0.5})
+    curve = buy_and_hold_curve(b)
+    assert curve[-1] == pytest.approx(1 + buy_and_hold_return(b))
+    assert curve[3] == pytest.approx((9 + 0.5) / (10 * (1 + BUY_FEE)))  # 除息日起計入股利
+
+
+def test_curve_metrics():
+    days = [date(2020, 1, 1), date(2021, 1, 1), date(2022, 1, 1)]
+    m = curve_metrics(days, [1.0, 2.0, 1.21], [True, True, False])
+    assert m["total_return"] == pytest.approx(0.21)
+    assert m["cagr"] == pytest.approx(1.21 ** (365.25 / 731) - 1)
+    assert m["max_drawdown"] == pytest.approx(-0.395)
+    assert m["exposure"] == pytest.approx(2 / 3)
+
+
+def test_combined_curve_equal_weight_and_fills_missing_days():
+    d = [date(2026, 1, i) for i in (5, 6, 7)]
+    days, values = combined_curve([(d, [1.0, 1.2, 1.4]), ([d[0], d[2]], [1.0, 0.8])])
+    assert days == d
+    assert values == pytest.approx([1.0, 1.1, 1.1])  # 第二檔 1/6 沒有資料，沿用前一天 1.0
+
+
+def test_ma60_exit_baseline_is_stratified_by_signal_day_position():
+    # 基準：站上季線那層平均 +5%、季線之下那層平均 -1%（隔天就被迫出場）
+    baseline = {"A": [(DAY0, 0.05, True), (DAY0, 0.05, True), (DAY0, -0.01, False), (DAY0, -0.01, False)]}
+    above = [Trade(DAY0, DAY0, 100.0, DAY0, 100.0, "ma_break", 0.0, 5, 0.06, True) for _ in range(3)]
+    stats = summarize({"A": above}, baseline)
+    # 只和站上季線那層比較：超額 +1%，不是和全部基準（+2%）比較的 +4%
+    assert stats["excess_return"] == pytest.approx(0.01)
+    assert stats["baseline_avg_return"] == pytest.approx(0.05)
+
+
+def test_simulate_records_stratum_only_for_ma60_exit():
+    b = bars(opens=[10, 11, 12, 12, 10, 9.4, 9], closes=[11, 12, 13, 12, 9.5, 9, 9], ma60=[10.5, 10, 10, 10, 10, 10, 10])
+    assert simulate(b, 0, EXIT_RULES["ma60_exit"]).stratum is True  # 訊號日收盤 11 > 季線 10.5
+    assert simulate(b, 4, EXIT_RULES["ma60_exit"]).stratum is False  # 訊號日收盤 9.5 < 季線 10
+    assert simulate(b, 0, EXIT_RULES["hold_5"]).stratum is None
