@@ -251,3 +251,33 @@ FROM (
     FROM backtest_trades
 ) t
 WHERE prev_exit IS NOT NULL AND entry_date <= prev_exit;
+
+-- 26. 參考價位獨立驗算：以 SQL 重算最近 60 個交易日的波段高低點、黃金分割與 ATR 停損，與 reference_levels 比對；應回傳 0 列
+--     （漲跌停價的升降單位已用證交所官方資料逐檔驗證，見 levels.py；這裡只檢查不超過參考價 ±10%）
+WITH ranked AS (
+    SELECT r.id, p.trade_date, p.high_price, p.low_price,
+           ROW_NUMBER() OVER (PARTITION BY r.id ORDER BY p.trade_date DESC) AS k
+    FROM reference_levels r
+    JOIN stock_prices p ON p.symbol = r.symbol AND p.trade_date <= r.basis_date
+), swing AS (
+    SELECT id, MAX(high_price) AS hi, MIN(low_price) AS lo,
+           MIN(trade_date) FILTER (WHERE high_price = max_hi) AS hi_date,
+           MIN(trade_date) FILTER (WHERE low_price = min_lo) AS lo_date
+    FROM (SELECT *, MAX(high_price) OVER (PARTITION BY id) AS max_hi, MIN(low_price) OVER (PARTITION BY id) AS min_lo
+          FROM ranked WHERE k <= 60) w
+    GROUP BY id
+)
+SELECT r.symbol, r.basis_date, s.hi, s.lo, s.hi_date, s.lo_date, r.swing_high, r.swing_low, r.fib_500, r.atr_stop
+FROM reference_levels r
+JOIN swing s ON s.id = r.id
+JOIN stock_indicators i ON i.symbol = r.symbol AND i.trade_date = r.basis_date
+WHERE r.swing_high <> s.hi OR r.swing_low <> s.lo
+   OR r.swing_high_date <> s.hi_date OR r.swing_low_date <> s.lo_date
+   OR r.swing_trend <> CASE WHEN s.lo_date < s.hi_date THEN 'up' ELSE 'down' END
+   OR ABS(r.fib_500 - (s.hi + s.lo) / 2) > 0.0001
+   OR ABS(r.fib_382 - CASE WHEN s.lo_date < s.hi_date THEN s.hi - 0.382 * (s.hi - s.lo) ELSE s.lo + 0.382 * (s.hi - s.lo) END) > 0.0001
+   OR ABS(r.fib_618 - CASE WHEN s.lo_date < s.hi_date THEN s.hi - 0.618 * (s.hi - s.lo) ELSE s.lo + 0.618 * (s.hi - s.lo) END) > 0.0001
+   OR r.atr_stop IS DISTINCT FROM ROUND(r.close_price - 3 * i.atr14, 4)
+   OR r.close_price <> (SELECT close_price FROM stock_prices p WHERE p.symbol = r.symbol AND p.trade_date = r.basis_date)
+   OR r.limit_up > r.reference_price * 1.1 OR r.limit_down < r.reference_price * 0.9
+   OR r.limit_up < r.reference_price * 1.09 OR r.limit_down > r.reference_price * 0.91;

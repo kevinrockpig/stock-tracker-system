@@ -1,6 +1,6 @@
 #!/bin/bash
 # 每日更新，輸出附加到 logs/daily-YYYY-MM.log：
-#   1. yfinance 擷取觀察名單日 K → 計算技術指標 → 掃描策略（python -m scraper.main）
+#   1. yfinance 擷取觀察名單日 K → 計算技術指標 → 掃描策略 → 回測 → 參考價位（python -m scraper.main）
 #   2. 累積證交所 / 櫃買中心的官方開放資料（python -m scraper.official）
 # 兩個步驟互相獨立：第 1 步失敗仍會執行第 2 步（官方資料只提供當天，漏抓無法補回）。
 #

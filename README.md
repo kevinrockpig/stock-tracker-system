@@ -68,6 +68,7 @@ flowchart LR
 | `strategy_signals` | 某股票某交易日符合某策略 | `(symbol, trade_date, strategy)` 唯一 |
 | `backtest_trades` | 策略回測的每筆交易（4 種出場規則） | `(strategy, symbol, exit_rule, entry_date)` 唯一 |
 | `backtest_stats` | 策略回測統計（個別股票與全部合併），含任意日進場與買進持有基準 | `(strategy, scope, exit_rule)` 唯一 |
+| `reference_levels` | 參考價位：ATR 停損、60 日波段黃金分割、下一交易日漲跌停價、除權息預告（每檔每天一筆） | `(symbol, basis_date)` 唯一 |
 | `official_daily_quotes` | 證交所 / 櫃買中心開放資料的原始日成交資訊（全部股票與 ETF，每日累積，目前尚未用於畫面） | `(market, code, trade_date)` 唯一 |
 | `official_corporate_actions` | 證交所 / 櫃買中心的除權除息預告（現金股利、配股比例，每日累積） | `(market, code, ex_date)` 唯一 |
 

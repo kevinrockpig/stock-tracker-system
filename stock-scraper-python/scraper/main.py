@@ -6,6 +6,7 @@
 2. 在同一個交易（transaction）中：寫入日 K 與除權息事件 → 從資料庫讀回全部日 K 計算技術指標
    → 依指標掃描策略並同步策略訊號
 3. 全部股票完成後，依最新訊號重新計算策略回測（scraper/backtest.py）
+4. 計算下一個交易日的參考價位（scraper/levels.py）
 """
 
 import argparse
@@ -50,6 +51,7 @@ from scraper.fetcher import (
     to_records,
 )
 from scraper.indicators import compute_indicators, to_indicator_records
+from scraper.levels import log_levels, run_reference_levels
 from scraper.strategies import STRATEGIES, evaluate_strategies, to_signal_set
 
 logger = logging.getLogger("scraper")
@@ -169,6 +171,11 @@ def run(force_full: bool = False) -> int:
     except Exception:
         logger.exception("策略回測失敗（日 K、指標與訊號已寫入，不受影響）")
         failed.append("回測")
+    try:
+        log_levels(run_reference_levels(engine, WATCHLIST))
+    except Exception:
+        logger.exception("參考價位計算失敗（日 K、指標、訊號與回測已寫入，不受影響）")
+        failed.append("參考價位")
     engine.dispose()
     failed_symbols = [s for s in failed if s in WATCHLIST]
     logger.info("完成：成功 %d 檔，失敗 %d 檔 %s", len(WATCHLIST) - len(failed_symbols), len(failed_symbols), failed or "")

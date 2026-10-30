@@ -8,6 +8,7 @@
   strategy_signals  策略訊號，只存「某股票某交易日符合某策略」的組合
   backtest_trades   策略回測的每筆交易（見 backtest.py）
   backtest_stats    策略回測統計：每個（策略, 股票或全部, 出場規則）一筆
+  reference_levels  參考價位：每檔股票每個交易日收盤後計算一筆（見 levels.py），保留歷史供日後檢視
   official_daily_quotes       證交所 / 櫃買中心開放資料的原始日成交資訊（每日累積，與上面幾張表獨立）
   official_corporate_actions  證交所 / 櫃買中心的除權除息預告（每日累積）
 """
@@ -198,6 +199,51 @@ backtest_stats = Table(
     ),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     UniqueConstraint("strategy", "scope", "exit_rule", name="uq_backtest_stats_key"),
+)
+
+
+# 參考價位：以 basis_date 當天收盤後的資料計算、供下一個交易日參考。每天新增一筆並保留，
+# 日後可回頭檢視當時看到的價位（除權息預告會變動，事後無法重算出一樣的結果）
+LEVEL_VALUE_COLUMNS = (
+    "close_price", "atr14", "atr_stop",
+    "swing_days", "swing_high", "swing_high_date", "swing_low", "swing_low_date", "swing_trend",
+    "fib_382", "fib_500", "fib_618",
+    "reference_price", "reference_exact", "limit_up", "limit_down",
+    "next_ex_date", "next_ex_type", "next_cash_dividend",
+)
+reference_levels = Table(
+    "reference_levels",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("symbol", String(20), nullable=False),
+    Column("basis_date", Date, nullable=False),  # 計算依據的交易日（最新收盤日）
+    Column("close_price", Numeric(12, 4), nullable=False),
+    Column("atr14", Numeric(12, 4)),
+    Column("atr_stop", Numeric(12, 4)),  # 收盤價 − 3 × ATR14（指標暖身期為 NULL）
+    Column("swing_days", Integer, nullable=False),  # 波段區間實際的交易日數（資料不足 60 天時較少）
+    Column("swing_high", Numeric(12, 4), nullable=False),
+    Column("swing_high_date", Date, nullable=False),
+    Column("swing_low", Numeric(12, 4), nullable=False),
+    Column("swing_low_date", Date, nullable=False),
+    Column("swing_trend", String(4), nullable=False),  # up：低點在前（回檔位置）/ down：高點在前（反彈位置）
+    Column("fib_382", Numeric(12, 4), nullable=False),
+    Column("fib_500", Numeric(12, 4), nullable=False),
+    Column("fib_618", Numeric(12, 4), nullable=False),
+    Column("reference_price", Numeric(12, 4), nullable=False),  # 下一個交易日的參考價
+    Column("reference_exact", Boolean, nullable=False),  # false：下一個交易日除權，參考價以官方公告為準
+    Column("limit_up", Numeric(12, 4), nullable=False),
+    Column("limit_down", Numeric(12, 4), nullable=False),
+    Column("next_ex_date", Date),  # 官方預告中 basis_date 之後最近的除權息日
+    Column("next_ex_type", String(4)),  # 權 / 息 / 權息
+    Column("next_cash_dividend", Numeric(18, 8)),  # 每股現金股利（未公告為 NULL）
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("symbol", "basis_date", name="uq_reference_levels_symbol_basis_date"),
+    ForeignKeyConstraint(
+        ["symbol", "basis_date"],
+        ["stock_prices.symbol", "stock_prices.trade_date"],
+        name="fk_reference_levels_stock_prices",
+        ondelete="CASCADE",
+    ),
 )
 
 
@@ -488,6 +534,44 @@ def sync_backtest_stats(conn: Connection, rows: list[dict]) -> dict[str, int]:
     if stale:
         conn.execute(backtest_stats.delete().where(backtest_stats.c.id.in_(stale)))
     return {**counts, "deleted": len(stale)}
+
+
+def load_level_inputs(conn: Connection, symbol: str, days: int) -> pd.DataFrame:
+    """參考價位的輸入：最近 days 個交易日的高低收與 ATR14（依日期由舊到新，數值為 Decimal）。"""
+    stmt = (
+        select(
+            stock_prices.c.trade_date, stock_prices.c.high_price, stock_prices.c.low_price,
+            stock_prices.c.close_price, stock_indicators.c.atr14,
+        )
+        .outerjoin(
+            stock_indicators,
+            (stock_indicators.c.symbol == stock_prices.c.symbol)
+            & (stock_indicators.c.trade_date == stock_prices.c.trade_date),
+        )
+        .where(stock_prices.c.symbol == symbol)
+        .order_by(stock_prices.c.trade_date.desc())
+        .limit(days)
+    )
+    rows = conn.execute(stmt).mappings().all()
+    return pd.DataFrame(list(reversed(rows)), columns=["trade_date", "high_price", "low_price", "close_price", "atr14"])
+
+
+def load_next_corporate_action(conn: Connection, market: str, code: str, after) -> dict | None:
+    """官方預告中 after 之後最近的一筆除權息（ex_date、action_type、cash_dividend），沒有則 None。"""
+    t = official_corporate_actions
+    row = conn.execute(
+        select(t.c.ex_date, t.c.action_type, t.c.cash_dividend)
+        .where(t.c.market == market, t.c.code == code, t.c.ex_date > after)
+        .order_by(t.c.ex_date)
+        .limit(1)
+    ).mappings().first()
+    return dict(row) if row else None
+
+
+def upsert_reference_levels(conn: Connection, rows: list[dict]) -> dict[str, int]:
+    if not rows:
+        return {"inserted": 0, "updated": 0, "unchanged": 0}
+    return _upsert(conn, reference_levels, rows, "uq_reference_levels_symbol_basis_date", LEVEL_VALUE_COLUMNS)
 
 
 def _upsert(
