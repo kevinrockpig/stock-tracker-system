@@ -1,6 +1,6 @@
 # stock-api-java
 
-Spring Boot RESTful API：從 PostgreSQL（Neon）讀取 Python 服務寫入的行情、技術指標與策略訊號，整理成前端需要的 JSON。
+Spring Boot RESTful API：從 PostgreSQL（Neon）讀取 Python 服務寫入的行情、技術指標、策略訊號與策略回測結果，整理成前端需要的 JSON。
 本服務**只讀取**資料庫：資料表由 `stock-scraper-python` 建立與寫入，啟動時以 `ddl-auto=validate` 檢查結構是否一致。
 
 ## 需求
@@ -42,11 +42,15 @@ export DB_URL='jdbc:postgresql://<host>:5432/<db>?sslmode=require' DB_USERNAME='
 | `GET /api/stocks/{symbol}/history?from=&to=` | 歷史日 K 與當日技術指標，`from` / `to` 為 `YYYY-MM-DD`，皆可省略 |
 | `GET /api/strategies` | 可用的選股策略（代碼、中文名稱、成立條件） |
 | `GET /api/screener?strategy=&days=` | 最近 `days` 個交易日（1～60，預設 1）內符合策略的股票 |
+| `GET /api/backtests?scope=` | 策略回測統計（每個策略 × 出場規則一筆）：勝率與信賴區間、平均報酬、相對任意日進場的超額報酬與區間、前後兩段、是否有優勢、買進持有；`scope` 為 `ALL`（預設，全部合併）或股票代號 |
+| `GET /api/stocks/{symbol}/trades?strategy=&exitRule=` | 某檔股票的歷史回測交易（進出場日期、價格、股利、報酬），`exitRule` 為 `hold_5`、`hold_10`、`hold_20`、`trailing_atr` |
 
 ```bash
 curl http://localhost:8081/api/stocks
 curl "http://localhost:8081/api/stocks/2330.TW/history?from=2026-10-01"
 curl "http://localhost:8081/api/screener?strategy=golden_cross&days=10"
+curl "http://localhost:8081/api/backtests"
+curl "http://localhost:8081/api/stocks/2330.TW/trades?strategy=golden_cross&exitRule=trailing_atr"
 ```
 
 - 報價為**日收盤價**（`quoteType: DAILY_CLOSE`），非即時報價
@@ -57,8 +61,10 @@ curl "http://localhost:8081/api/screener?strategy=golden_cross&days=10"
 
 ```
 src/main/java/com/ugi/stock/
-├── controller/   StockController（/api/stocks）、StrategyController（/api/strategies、/api/screener）
-├── service/      StockService、StrategyService、Strategy（策略代碼，須與 Python 的 STRATEGIES 一致）
+├── controller/   StockController（/api/stocks）、StrategyController（/api/strategies、/api/screener）、
+│                 BacktestController（/api/backtests、/api/stocks/{symbol}/trades）
+├── service/      StockService、StrategyService、BacktestService、
+│                 Strategy / ExitRule（策略與出場規則代碼，須與 Python 的 STRATEGIES / EXIT_RULES 一致）
 ├── repository/   Spring Data JPA 查詢
 ├── entity/       對應資料表，全部標記 @Immutable（唯讀）
 └── dto/          API 回應格式（Java record）

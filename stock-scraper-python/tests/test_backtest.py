@@ -126,13 +126,18 @@ def test_state_strategy_only_enters_on_first_day():
 def test_baseline_enters_every_day():
     b = bars(opens=[10, 10, 10, 10, 10, 10], closes=[10, 10, 10, 10, 10, 10])
     returns = baseline_returns(b, HOLD_3)
-    assert len(returns) == 3  # 訊號日 0、1、2 可完整持有 3 天；之後的還沒出場
-    assert all(r == pytest.approx(-0.00585, abs=1e-5) for r in returns)
+    assert [d for d, _ in returns] == b.dates[1:4]  # 訊號日 0、1、2 隔天進場且可完整持有 3 天；之後的還沒出場
+    assert all(r == pytest.approx(-0.00585, abs=1e-5) for _, r in returns)
 
 
 def test_wilson_interval_known_value():
     low, high = wilson_interval(6, 10)
     assert low == pytest.approx(0.3127, abs=1e-4) and high == pytest.approx(0.8318, abs=1e-4)
+
+
+def base(*returns, day=0):
+    """任意日進場的（進場日, 報酬）。"""
+    return [(DAY0 + timedelta(days=day), r) for r in returns]
 
 
 def closed_trade(r, day=0, days=5):
@@ -143,7 +148,7 @@ def closed_trade(r, day=0, days=5):
 def test_summarize_metrics():
     trades = [closed_trade(0.10, 0), closed_trade(-0.05, 1), closed_trade(-0.02, 2), closed_trade(0.04, 3)]
     open_trade = Trade(DAY0, DAY0 + timedelta(days=9), 100.0, None, None, None, 0.0, 2, None)
-    stats = summarize({"2330.TW": trades + [open_trade]}, {"2330.TW": [0.01, -0.01]})
+    stats = summarize({"2330.TW": trades + [open_trade]}, {"2330.TW": base(0.01, -0.01)})
     assert stats["trades"] == 4 and stats["open_trades"] == 1 and stats["wins"] == 2
     assert stats["win_rate"] == 0.5
     assert stats["avg_win"] == pytest.approx(0.07) and stats["avg_loss"] == pytest.approx(-0.035)
@@ -163,7 +168,7 @@ def test_excess_return_compares_with_same_stock_baseline():
     # A 股任意日平均 +1%、B 股 +5%；A 的兩筆交易各 +3%（超額 +2%），B 的一筆 +5%（超額 0）
     stats = summarize(
         {"A": [closed_trade(0.03, 0), closed_trade(0.03, 1)], "B": [closed_trade(0.05, 2)]},
-        {"A": [0.0, 0.02], "B": [0.04, 0.06]},
+        {"A": base(0.0, 0.02), "B": base(0.04, 0.06)},
     )
     assert stats["excess_return"] == pytest.approx((0.02 + 0.02 + 0.0) / 3)
     # 基準依交易所屬股票加權，平均報酬 − 基準 = 超額報酬
@@ -173,12 +178,30 @@ def test_excess_return_compares_with_same_stock_baseline():
 def test_has_edge_only_when_interval_above_zero():
     steady = [closed_trade(0.03 + 0.001 * (i % 3), i) for i in range(30)]  # 穩定比基準高約 3%
     noisy = [closed_trade(0.30 if i % 2 else -0.27, i) for i in range(30)]  # 平均也略高，但波動很大
-    baseline = {"A": [0.0, 0.0]}
+    baseline = {"A": base(0.0, 0.0)}
     edge = summarize({"A": steady}, baseline)
     assert edge["has_edge"] and edge["excess_low"] > 0
     no_edge = summarize({"A": noisy}, baseline)
     assert not no_edge["has_edge"] and no_edge["excess_low"] < 0 < no_edge["excess_high"]
     assert summarize({"A": [closed_trade(0.05)]}, baseline)["has_edge"] is False  # 只有 1 筆無法估計區間
+
+
+def test_robustness_requires_both_halves_above_baseline():
+    split = DAY0 + timedelta(days=30)
+    # 前半段基準 0%、後半段基準 +5%（例如後半段是大多頭）
+    baseline = {"A": base(0.0, day=0) + base(0.05, day=40)}
+    early = [closed_trade(0.03 + 0.001 * (i % 3), i) for i in range(30)]  # 前半段，比同期基準高 3%
+    late_good = [closed_trade(0.08 + 0.001 * (i % 3), 40 + i) for i in range(30)]  # 後半段，比同期基準高 3%
+    late_bad = [closed_trade(0.04 + 0.001 * (i % 3), 40 + i) for i in range(30)]  # 後半段，比同期基準低 1%
+
+    good = summarize({"A": early + late_good}, baseline, split)
+    assert good["trades_first"] == 30 and good["trades_second"] == 30
+    assert good["excess_first"] == pytest.approx(0.031, abs=1e-3) and good["excess_second"] == pytest.approx(0.031, abs=1e-3)
+    assert good["has_edge"]
+
+    bad = summarize({"A": early + late_bad}, baseline, split)
+    assert bad["excess_second"] < 0
+    assert bad["excess_low"] > 0 and not bad["has_edge"]  # 整體區間雖在 0 以上，但後半段輸給同期基準 → 不算有優勢
 
 
 def test_exit_rules_are_fixed():

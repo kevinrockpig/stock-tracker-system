@@ -11,8 +11,12 @@
 - 成本：一般台股費率，買賣手續費各 0.1425%（不打折），賣出證交稅股票 0.3%、ETF 0.1%
 - 報酬含現金股利：除息日在「進場日之後、出場日當天或之前」的股利計入（進場當天才除息則已領不到）
 - 基準：同一檔股票「任意一個交易日」都依相同規則進場的平均結果（可重疊）。
-  超額報酬 = 每筆交易報酬 − 同一檔股票的基準平均；其 95% 信賴區間下限 > 0 才視為「有優勢」（has_edge）。
-  不同股票常同時漲跌，合併統計的樣本並非完全獨立，區間可能偏窄，因此「有優勢」只是最低門檻
+  超額報酬 = 每筆交易報酬 − 同一檔股票的基準平均。「有優勢」（has_edge）需同時符合：
+  1. 超額報酬的 95% 信賴區間下限 > 0
+  2. 穩健性：回測期間以交易日中點切成前後兩段，兩段的超額報酬（各自與同一段的基準比較）都 > 0。
+     真正有效的訊號在不同時期都應有效；只在某段行情有效的，多半是剛好遇到那段行情
+  不同股票常同時漲跌，合併統計的樣本並非完全獨立；同時比較多組（策略 × 出場規則）也可能有組別靠運氣通過，
+  因此「有優勢」只是最低門檻，不代表未來一定有效
 
 已知限制（也顯示在網站說明頁）：
 - 假設一定能以開盤價 / 收盤價成交；未考慮跌停賣不掉、滑價
@@ -175,13 +179,13 @@ def run_strategy(bars: Bars, signal_indexes: list[int], strategy: str, rule: Exi
     return trades
 
 
-def baseline_returns(bars: Bars, rule: ExitRule) -> list[float]:
-    """任意一天都以相同規則進場（可重疊）的報酬，代表「不看訊號」的表現。"""
+def baseline_returns(bars: Bars, rule: ExitRule) -> list[tuple[date, float]]:
+    """任意一天都以相同規則進場（可重疊）的（進場日, 報酬），代表「不看訊號」的表現。"""
     returns = []
     for i in range(bars.start, len(bars.dates) - 1):
         trade = simulate(bars, i, rule)
         if trade is not None and trade.net_return is not None:
-            returns.append(trade.net_return)
+            returns.append((trade.entry_date, trade.net_return))
     return returns
 
 
@@ -211,12 +215,32 @@ def t_critical(df: int) -> float:
     return z + (z**3 + z) / (4 * df) + (5 * z**5 + 16 * z**3 + 3 * z) / (96 * df**2)
 
 
-def summarize(trades_by_symbol: dict[str, list[Trade]], baselines: dict[str, list[float]]) -> dict:
-    """交易統計。trades_by_symbol：股票 → 交易；baselines：股票 → 任意日進場的報酬（同一出場規則）。
+def _mean_or_none(values) -> float | None:
+    values = list(values)
+    return statistics.fmean(values) if values else None
+
+
+def split_excess(closed: list[tuple[Trade, str]], baselines: dict, split_date: date) -> dict:
+    """前後兩段各自的超額報酬：進場日在 split_date 之前為前段；每段都與同一檔股票「同一段」的任意日進場比較。"""
+    result = {}
+    for half, in_half in (("first", lambda d: d < split_date), ("second", lambda d: d >= split_date)):
+        base = {s: _mean_or_none(r for d, r in items if in_half(d)) for s, items in baselines.items()}
+        excess = [t.net_return - base[s] for t, s in closed if in_half(t.entry_date) and base[s] is not None]
+        result[f"trades_{half}"] = len(excess)
+        result[f"excess_{half}"] = _mean_or_none(excess)
+    return result
+
+
+def summarize(trades_by_symbol: dict[str, list[Trade]], baselines: dict[str, list], split_date: date | None = None) -> dict:
+    """交易統計。trades_by_symbol：股票 → 交易；baselines：股票 → 任意日進場的（進場日, 報酬），同一出場規則。
 
     基準與超額報酬都和「同一檔股票」比較：合併統計時，訊號集中在哪幾檔不會影響比較的公平性。
+    split_date 有值時另外計算前後兩段的超額報酬，並作為「有優勢」的穩健性條件。
     """
-    base = {s: (statistics.fmean(r), sum(x > 0 for x in r) / len(r)) for s, r in baselines.items() if r}
+    base = {
+        s: (statistics.fmean(r for _, r in items), sum(r > 0 for _, r in items) / len(items))
+        for s, items in baselines.items() if items
+    }
     pairs = sorted(((t, s) for s, items in trades_by_symbol.items() for t in items), key=lambda p: p[0].entry_date)
     closed = [(t, s) for t, s in pairs if t.net_return is not None]
     returns = [t.net_return for t, _ in closed]
@@ -235,7 +259,9 @@ def summarize(trades_by_symbol: dict[str, list[Trade]], baselines: dict[str, lis
         half = t_critical(len(excess) - 1) * statistics.stdev(excess) / math.sqrt(len(excess))
         excess_low, excess_high = statistics.fmean(excess) - half, statistics.fmean(excess) + half
 
-    all_baseline = [r for items in baselines.values() for r in items]
+    all_baseline = [r for items in baselines.values() for _, r in items]
+    halves = split_excess(closed, baselines, split_date) if split_date else {}
+    robust = not split_date or all((halves[k] or 0) > 0 for k in ("excess_first", "excess_second"))
     avg_win = statistics.fmean(wins) if wins else None
     avg_loss = statistics.fmean(losses) if losses else None
     return {
@@ -267,7 +293,12 @@ def summarize(trades_by_symbol: dict[str, list[Trade]], baselines: dict[str, lis
         "excess_return": statistics.fmean(excess) if excess else None,
         "excess_low": excess_low,
         "excess_high": excess_high,
-        "has_edge": excess_low is not None and excess_low > 0,
+        "split_date": split_date,
+        "trades_first": halves.get("trades_first"),
+        "excess_first": halves.get("excess_first"),
+        "trades_second": halves.get("trades_second"),
+        "excess_second": halves.get("excess_second"),
+        "has_edge": excess_low is not None and excess_low > 0 and robust,
     }
 
 
@@ -310,8 +341,15 @@ def backtest_symbol(symbol: str, frame: pd.DataFrame, signals: dict, dividends: 
 ALL_SCOPE = "ALL"  # 觀察名單全部股票合併統計
 
 
+def middle_trading_date(results: dict[str, SymbolResult]) -> date | None:
+    """回測期間（所有股票的交易日聯集）的中點，作為前後兩段的切分日；所有統計共用同一天。"""
+    days = sorted({d for r in results.values() for d in r.bars.dates[r.bars.start:]})
+    return days[len(days) // 2] if days else None
+
+
 def build_stats(results: dict[str, SymbolResult]) -> list[dict]:
     """每個（策略, 範圍, 出場規則）一筆統計；範圍為個別股票，以及全部合併（ALL）。"""
+    split_date = middle_trading_date(results)
     rows = []
     for strategy in STRATEGIES:
         for code in EXIT_RULES:
@@ -328,7 +366,7 @@ def build_stats(results: dict[str, SymbolResult]) -> list[dict]:
                     "exit_rule": code,
                     "period_start": min((b.dates[b.start] for b in usable), default=None),
                     "period_end": max((b.dates[-1] for b in usable), default=None),
-                    **summarize(trades, baselines),
+                    **summarize(trades, baselines, split_date),
                     # 合併範圍為各股票買進持有報酬的平均（等權重）
                     "buy_hold_return": statistics.fmean(holds) if holds else None,
                 })
@@ -396,7 +434,10 @@ def log_summary(stats: list[dict]) -> None:
     rows = [r for r in stats if r["scope"] == ALL_SCOPE]
     if not rows:
         return
-    logger.info("===== 策略回測（%s ~ %s，全部股票合併，已扣成本含股利）=====", rows[0]["period_start"], rows[0]["period_end"])
+    logger.info(
+        "===== 策略回測（%s ~ %s，前後段以 %s 切分，全部股票合併，已扣成本含股利；同時比較 %d 組）=====",
+        rows[0]["period_start"], rows[0]["period_end"], rows[0]["split_date"], len(rows),
+    )
     for r in rows:
         win = "—" if r["win_rate"] is None else (
             f"{r['win_rate'] * 100:.0f}%（{r['win_rate_low'] * 100:.0f}~{r['win_rate_high'] * 100:.0f}%）"
@@ -405,9 +446,10 @@ def log_summary(stats: list[dict]) -> None:
             f"{_pct(r['excess_return'])}（{_pct(r['excess_low'])} ~ {_pct(r['excess_high'])}）"
         )
         logger.info(
-            "  %-8s %-24s %4d 次 勝率 %-14s 平均 %-8s 基準 %-8s 超額 %s %s",
+            "  %-8s %-24s %4d 次 勝率 %-14s 平均 %-8s 基準 %-8s 超額 %s 前段 %s 後段 %s %s",
             STRATEGIES[r["strategy"]], EXIT_RULES[r["exit_rule"]].label, r["trades"], win,
-            _pct(r["avg_return"]), _pct(r["baseline_avg_return"]), excess, "★有優勢" if r["has_edge"] else "無明顯優勢",
+            _pct(r["avg_return"]), _pct(r["baseline_avg_return"]), excess,
+            _pct(r["excess_first"]), _pct(r["excess_second"]), "★有優勢" if r["has_edge"] else "無明顯優勢",
         )
 
 

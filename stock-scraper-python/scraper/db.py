@@ -173,10 +173,14 @@ STAT_VALUE_COLUMNS = (
     "avg_return", "median_return", "avg_win", "avg_loss", "payoff_ratio", "profit_factor",
     "max_loss", "max_consecutive_losses", "avg_holding_days",
     "baseline_trades", "baseline_avg_return", "baseline_win_rate", "buy_hold_return",
-    # 超額報酬 = 交易報酬 − 同一檔股票任意日進場的平均；95% 信賴區間下限 > 0 時 has_edge 為 true
-    "excess_return", "excess_low", "excess_high", "has_edge",
+    # 超額報酬 = 交易報酬 − 同一檔股票任意日進場的平均；
+    # has_edge：95% 信賴區間下限 > 0，且前後兩段（以 split_date 切分）的超額報酬都 > 0
+    "excess_return", "excess_low", "excess_high",
+    "split_date", "trades_first", "excess_first", "trades_second", "excess_second",
+    "has_edge",
 )
 _INTEGER_STATS = {"trades", "open_trades", "wins", "max_consecutive_losses", "baseline_trades"}
+_NULLABLE_INTEGER_STATS = {"trades_first", "trades_second"}  # 後來新增的欄位允許 NULL，既有資料表才能自動補上
 backtest_stats = Table(
     "backtest_stats",
     metadata,
@@ -185,9 +189,10 @@ backtest_stats = Table(
     Column("scope", String(20), nullable=False),
     Column("exit_rule", String(20), nullable=False),
     *(
-        Column(name, Date) if name.startswith("period_")
+        Column(name, Date) if name.startswith("period_") or name.endswith("_date")
         else Column(name, Boolean) if name == "has_edge"
         else Column(name, Integer, nullable=False) if name in _INTEGER_STATS
+        else Column(name, Integer) if name in _NULLABLE_INTEGER_STATS
         else Column(name, Numeric(12, 6))
         for name in STAT_VALUE_COLUMNS
     ),

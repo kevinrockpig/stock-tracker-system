@@ -74,7 +74,7 @@ public class StrategyService {
         return new ScreenerResponse(toResponse(strategy), days, fromDate, marketDate, matches);
     }
 
-    private static StrategyResponse toResponse(Strategy strategy) {
+    static StrategyResponse toResponse(Strategy strategy) {
         return new StrategyResponse(strategy.code(), strategy.label(), strategy.description());
     }
 }
