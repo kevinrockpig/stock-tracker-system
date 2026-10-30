@@ -1,11 +1,15 @@
 #!/bin/bash
-# 每日更新：擷取日 K → 計算技術指標 → 掃描策略，輸出附加到 logs/daily-YYYY-MM.log。
+# 每日更新，輸出附加到 logs/daily-YYYY-MM.log：
+#   1. yfinance 擷取觀察名單日 K → 計算技術指標 → 掃描策略（python -m scraper.main）
+#   2. 累積證交所 / 櫃買中心的官方開放資料（python -m scraper.official）
+# 兩個步驟互相獨立：第 1 步失敗仍會執行第 2 步（官方資料只提供當天，漏抓無法補回）。
 #
 # 手動執行：./scripts/run_daily.sh，或在 Finder 點兩下 scripts/update-stock-data.command
 # 自動排程：scripts/install_schedule.sh（目前延後實作，見專案根目錄 TODO.md）
 # 休市日（國定假日、颱風假）執行也不會出錯：沒有新的交易日，結果維持前一個交易日。
 #
-# exit code：0 成功、1 部分股票失敗、2 設定錯誤、3 資料庫錯誤、75 已有更新正在執行
+# exit code：0 成功、1 部分股票或來源失敗、2 設定錯誤、3 資料庫錯誤、75 已有更新正在執行
+#（兩個步驟都失敗時，回傳數字較大的那個）
 
 set -u
 cd "$(dirname "$0")/.." || exit 1
@@ -24,8 +28,13 @@ trap 'rmdir "${LOCK_DIR}"' EXIT
 
 run() {
   echo "===== $(date '+%Y-%m-%d %H:%M:%S') 開始 ====="
+  echo "----- 1/2 觀察名單（yfinance）-----"
   ./venv/bin/python -m scraper.main
-  local status=$?
+  local main_status=$?
+  echo "----- 2/2 官方開放資料累積（證交所 / 櫃買中心）-----"
+  ./venv/bin/python -m scraper.official
+  local official_status=$?
+  local status=$(( main_status > official_status ? main_status : official_status ))
   echo "===== $(date '+%Y-%m-%d %H:%M:%S') 結束（exit ${status}）====="
   echo
   return "${status}"

@@ -1,0 +1,84 @@
+# 官方開放資料每日累積（證交所 / 櫃買中心）
+#
+# 這個檔案要放在「私人 repo」（例如 stock-data-archive）的 .github/workflows/ 底下，不是放在公開的程式碼 repo：
+#   - 公開 repo 的 Actions 執行紀錄任何人都看得到，紀錄中會出現資料庫主機等資訊
+#   - CSV 備份 commit 到私人 repo，不對外散布
+#
+# 流程：取出私人 repo（存放備份）與公開 repo（程式碼）→ 安裝套件 → python -m scraper.official → commit 備份檔
+# 需要的 Secrets（私人 repo → Settings → Secrets and variables → Actions）：DB_URL、DB_USERNAME、DB_PASSWORD
+# 失敗時 GitHub 會寄信通知；之後可在 Actions 頁面按「Run workflow」重跑，或在本機點一鍵更新補抓
+
+name: 官方資料每日累積
+
+on:
+  schedule:
+    # GitHub 的排程時間是 UTC，以下換算為台灣時間（UTC+8）。
+    # 實測（2026-10-30）：證交所 CSV 約下午 2 點更新為當天資料；櫃買中心約晚上 11 點半、證交所 OpenAPI 約隔天清晨 5 點才更新。
+    # 因此在「隔天早上」抓前一個交易日，此時三個來源都已更新，且證交所 CSV 還沒換成下一天。
+    # 週二到週六執行 = 抓週一到週五的資料；休市日執行只會得到前一交易日的資料（未變動），不會出錯。
+    # 排程可能延遲或偶爾被略過，所以排兩次，第二次作為備援（重複執行不會產生重複資料）。
+    - cron: "17 0 * * 2-6"   # 台灣時間 08:17
+    - cron: "47 3 * * 2-6"   # 台灣時間 11:47（備援）
+  workflow_dispatch:           # Actions 頁面的「Run workflow」按鈕，可隨時手動執行
+
+permissions:
+  contents: write              # 只用來把備份檔 push 回這個私人 repo
+
+concurrency:
+  group: official-daily        # 同時只跑一個，避免兩次執行同時 push 互相衝突
+  cancel-in-progress: false
+
+jobs:
+  accumulate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TZ: Asia/Taipei          # log 時間與 commit 訊息的日期使用台灣時間
+    steps:
+      - name: 取出備份 repo（本 repo）
+        uses: actions/checkout@v7
+        with:
+          path: data
+
+      - name: 取出程式碼（公開 repo）
+        uses: actions/checkout@v7
+        with:
+          repository: kevinrockpig/stock-tracker-system
+          ref: main
+          path: code
+          persist-credentials: false   # 程式碼 repo 只需讀取
+
+      - name: 安裝 Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: code/stock-scraper-python/requirements.txt
+
+      - name: 安裝套件
+        working-directory: code/stock-scraper-python
+        run: pip install -r requirements.txt
+
+      - name: 累積官方資料
+        working-directory: code/stock-scraper-python
+        env:
+          DB_URL: ${{ secrets.DB_URL }}
+          DB_USERNAME: ${{ secrets.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          ARCHIVE_DIR: ${{ github.workspace }}/data/archive
+        run: python -m scraper.official
+
+      # 上一步部分來源失敗時仍會執行：已成功的備份照樣保存；整個執行仍標示為失敗並寄信通知
+      - name: Commit 備份檔
+        if: ${{ !cancelled() }}
+        working-directory: data
+        run: |
+          if [ ! -d archive ]; then echo "沒有產生備份檔"; exit 0; fi
+          git add archive
+          if git diff --cached --quiet; then echo "備份檔沒有變更"; exit 0; fi
+          git diff --cached --stat
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --quiet -m "data: 官方資料備份 $(date +%F)"
+          git pull --rebase --quiet
+          git push --quiet

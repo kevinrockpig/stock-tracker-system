@@ -54,7 +54,7 @@ python -m scraper.main --period 5d     # 指定期間：5d、1mo、3mo、1y、2y
 psql "host=<host> dbname=<db> user=<user> sslmode=require" -f sql/verify.sql
 ```
 
-查詢 4、6、7、11、12 應回傳 0 列；查詢 8（缺漏交易日）有已知例外，列在查詢的註解中；查詢 9 的兩個筆數應相同。
+查詢 4、6、7、11、12 應回傳 0 列；查詢 8（缺漏交易日）有已知例外，列在查詢的註解中；查詢 9 的兩個筆數應相同；查詢 16～20 為官方開放資料的累積狀況、事件日偵測、收盤價比對、除權除息預告與資料庫用量。
 
 ## 技術指標
 
@@ -81,10 +81,50 @@ MACD、RSI、KD 前 120 筆為暖身期，存為 NULL；因此預設抓兩年，
 
 執行結束時 log 會列出市場最新交易日各策略符合的股票。
 
+## 官方開放資料每日累積
+
+```bash
+python -m scraper.official
+```
+
+每天取得證交所（上市）與櫃買中心（上櫃）全部股票與 ETF 的資料，原樣存入資料庫（與 yfinance 的 `stock_prices` 分開，互不影響），並另存 CSV 備份。
+
+| 來源 | 網址 | 寫入 |
+|---|---|---|
+| 證交所 日成交 CSV | `twse.com.tw/exchangeReport/STOCK_DAY_ALL?response=open_data` | `official_daily_quotes`（收盤後當日更新） |
+| 證交所 日成交 OpenAPI | `openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL` | 同上（可能比 CSV 晚一天，兩者都抓可互相補漏） |
+| 櫃買中心 日成交 OpenAPI | `tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes` | 同上（另提供官方次一交易日參考價） |
+| 證交所 除權除息預告 | `openapi.twse.com.tw/v1/exchangeReport/TWT48U_ALL` | `official_corporate_actions` |
+| 櫃買中心 除權除息預告 | `tpex.org.tw/openapi/v1/tpex_exright_prepost` | 同上 |
+
+- **授權**：政府資料開放授權條款－第 1 版（https://data.gov.tw/license），可商業使用與散布；對外顯示時須依條款格式標示來源
+- **只提供當下的資料**：每天都要執行，漏掉的日子無法補回；休市日執行會取得前一交易日資料（未變動）
+- 只保留股票與 ETF（代號 4 碼，或 `00` 開頭），排除權證與特別股
+- 不做除權息 / 分割調整，原始數值完整保存，日後可重新計算
+- **證交所在除權息日的「漲跌價差」填 0**，不能用「收盤 − 漲跌」推算當日參考價。事件日改以「漲跌價差 ≠ 收盤 − 前日收盤」偵測，事件類型與現金股利由除權除息預告表判斷（`sql/verify.sql` 查詢 17）
+- 官方成交量與 yfinance 不同（涵蓋的交易類型不同），收盤價則一致（查詢 18）
+
+**CSV 備份**：每個來源每天一個 `<來源>/<年>/<日期>.csv.gz`，保留官方原始欄位，可直接用 Excel 開啟或重新匯入。
+存放位置為環境變數 `ARCHIVE_DIR`，未設定時為 `archive/`（不會 commit）。內容相同時不改寫檔案。
+
+**空間監控**：每次執行最後顯示資料庫用量；超過上限（預設 1024 MB，可用 `DB_STORAGE_LIMIT_MB` 調整）的 80% 時發出警告。
+
+### 雲端每日排程（GitHub Actions）
+
+官方資料漏抓就無法補回，因此另外在 GitHub Actions 每天自動執行 `scraper.official`，不依賴這台電腦開機。
+設定檔與說明在 [`deploy/data-archive-repo/`](deploy/data-archive-repo/README.md)，要複製到另一個**私人 repo** 使用：
+
+- 公開 repo 的 Actions 執行紀錄任何人都看得到，紀錄中會出現資料庫主機等資訊；CSV 備份也不宜公開散布
+- 私人 repo 取出這個公開 repo 的程式碼執行，資料庫連線資訊放在私人 repo 的 Secrets，CSV 備份 commit 回私人 repo
+- 週二到週六台灣時間 08:17、11:47（備援）各執行一次，抓前一個交易日：
+  實測櫃買中心約晚上 11 點半、證交所 OpenAPI 約隔天清晨 5 點才更新，證交所 CSV 則在隔天下午 2 點左右換成下一天
+- 失敗時 GitHub 會寄信通知，可在 Actions 頁面按「Run workflow」重跑，或在本機點一鍵更新補抓
+- 只有 `scraper.official` 在雲端執行；觀察名單（`scraper.main`）仍以手動一鍵更新為主
+
 ## 手動一鍵更新
 
 在 Finder 點兩下 `scripts/update-stock-data.command`：開啟終端機視窗顯示進度，結束後顯示成功或失敗，按任意鍵關閉。
-等同於在終端機執行 `./scripts/run_daily.sh`。輸出同時附加到 `logs/daily-YYYY-MM.log`。
+等同於在終端機執行 `./scripts/run_daily.sh`，依序執行 `scraper.main`（觀察名單）與 `scraper.official`（官方資料累積），兩者互相獨立。輸出同時附加到 `logs/daily-YYYY-MM.log`。
 
 建立桌面捷徑（只需做一次）：
 

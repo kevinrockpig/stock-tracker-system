@@ -5,6 +5,8 @@
   stock_prices      日 K（OHLCV），同一股票同一交易日只保留一筆
   stock_indicators  技術指標，與 stock_prices 一對一
   strategy_signals  策略訊號，只存「某股票某交易日符合某策略」的組合
+  official_daily_quotes       證交所 / 櫃買中心開放資料的原始日成交資訊（每日累積，與上面四張表獨立）
+  official_corporate_actions  證交所 / 櫃買中心的除權除息預告（每日累積）
 """
 
 import pandas as pd
@@ -27,8 +29,10 @@ from sqlalchemy import (
     inspect,
     literal_column,
     select,
+    text,
     tuple_,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 
@@ -112,6 +116,62 @@ strategy_signals = Table(
 )
 
 
+# 官方開放資料（證交所上市 / 櫃買中心上櫃）的原始日成交資訊：一個市場、一檔證券、一個交易日一筆。
+# 保留官方原始數值，不做除權息 / 分割調整；與 yfinance 的 stock_prices 分開存放，日後可據此重新計算
+official_daily_quotes = Table(
+    "official_daily_quotes",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("market", String(4), nullable=False),  # TWSE / TPEX
+    Column("code", String(10), nullable=False),
+    Column("name", String(100), nullable=False),
+    Column("trade_date", Date, nullable=False),
+    Column("open_price", Numeric(12, 4)),  # 當日無成交時開高低收為 NULL
+    Column("high_price", Numeric(12, 4)),
+    Column("low_price", Numeric(12, 4)),
+    Column("close_price", Numeric(12, 4)),
+    # 官方漲跌價差。注意：證交所在除權息日填 0（不是相對除權息參考價的漲跌），
+    # 因此不能用「收盤價 − 漲跌價差」推算當日參考價；事件日的偵測見 sql/verify.sql 查詢 17
+    Column("change", Numeric(12, 4)),
+    Column("next_reference_price", Numeric(12, 4)),  # 官方次一交易日參考價（只有櫃買中心提供）
+    Column("volume", BigInteger),  # 成交股數
+    Column("trade_value", BigInteger),  # 成交金額（元）
+    Column("transactions", BigInteger),  # 成交筆數
+    Column("source", String(20), nullable=False),  # 第一次寫入的來源：twse_csv / twse_openapi / tpex_openapi
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("market", "code", "trade_date", name="uq_official_daily_quotes_market_code_date"),
+    Index("ix_official_daily_quotes_date", "trade_date"),
+)
+
+OFFICIAL_VALUE_COLUMNS = (
+    "name", "open_price", "high_price", "low_price", "close_price", "change",
+    "next_reference_price", "volume", "trade_value", "transactions",
+)
+
+# 除權除息預告：一個市場、一檔證券、一個除權息日一筆。預告內容可能在除權息日前修正，以最新一次為準。
+# 日後區分「分割 / 配股」與「現金股利」時需要現金股利金額；開放資料只提供當下的預告，過了就查不到
+official_corporate_actions = Table(
+    "official_corporate_actions",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("market", String(4), nullable=False),  # TWSE / TPEX
+    Column("code", String(10), nullable=False),
+    Column("name", String(100), nullable=False),
+    Column("ex_date", Date, nullable=False),  # 除權息交易日
+    Column("action_type", String(4), nullable=False),  # 權 / 息 / 權息
+    Column("cash_dividend", Numeric(18, 8)),  # 每股現金股利（元）
+    Column("stock_dividend_ratio", Numeric(18, 8)),  # 官方「無償配股率」欄位原值
+    Column("raw", JSONB, nullable=False),  # 官方原始欄位（全部保留，欄位名稱依來源而異）
+    Column("source", String(20), nullable=False),  # 第一次寫入的來源：twse_actions / tpex_actions
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("market", "code", "ex_date", name="uq_official_corporate_actions_market_code_date"),
+)
+
+CORPORATE_ACTION_VALUE_COLUMNS = ("name", "action_type", "cash_dividend", "stock_dividend_ratio", "raw")
+
+
 class SchemaMismatchError(RuntimeError):
     """資料庫中已存在結構不同的同名資料表。"""
 
@@ -121,7 +181,7 @@ def init_schema(engine: Engine) -> None:
     metadata.create_all(engine)
 
     inspector = inspect(engine)
-    for table in (stocks, stock_prices, stock_indicators, strategy_signals):
+    for table in (stocks, stock_prices, stock_indicators, strategy_signals, official_daily_quotes, official_corporate_actions):
         actual = {col["name"] for col in inspector.get_columns(table.name)}
         missing = {col.name for col in table.columns} - actual
         if missing:
@@ -163,6 +223,36 @@ def upsert_prices(conn: Connection, rows: list[dict]) -> dict[str, int]:
 def upsert_indicators(conn: Connection, rows: list[dict]) -> dict[str, int]:
     """寫入技術指標，回傳新增 / 更新 / 未變動筆數。"""
     return _upsert(conn, stock_indicators, rows, "uq_stock_indicators_symbol_trade_date", INDICATOR_COLUMNS)
+
+
+def upsert_official_quotes(conn: Connection, rows: list[dict], chunk_size: int = 1000) -> dict[str, int]:
+    """寫入官方日成交資訊，回傳新增 / 更新 / 未變動筆數。
+
+    source 不列入比較：證交所 CSV 與 OpenAPI 的同一天資料內容相同，不會因來源不同而反覆更新。
+    分批寫入，避免單一 SQL 參數過多（PostgreSQL 上限 65,535 個）。
+    """
+    totals = {"inserted": 0, "updated": 0, "unchanged": 0}
+    for start in range(0, len(rows), chunk_size):
+        counts = _upsert(
+            conn, official_daily_quotes, rows[start:start + chunk_size],
+            "uq_official_daily_quotes_market_code_date", OFFICIAL_VALUE_COLUMNS,
+        )
+        for key in totals:
+            totals[key] += counts[key]
+    return totals
+
+
+def upsert_corporate_actions(conn: Connection, rows: list[dict]) -> dict[str, int]:
+    """寫入除權除息預告，回傳新增 / 更新 / 未變動筆數（預告內容修正時會更新）。"""
+    return _upsert(
+        conn, official_corporate_actions, rows,
+        "uq_official_corporate_actions_market_code_date", CORPORATE_ACTION_VALUE_COLUMNS,
+    )
+
+
+def database_size_bytes(conn: Connection) -> int:
+    """目前資料庫大小（PostgreSQL 統計值，與 Neon 計費用量可能略有差異）。"""
+    return conn.execute(text("SELECT pg_database_size(current_database())")).scalar()
 
 
 def load_prices(conn: Connection, symbol: str) -> pd.DataFrame:

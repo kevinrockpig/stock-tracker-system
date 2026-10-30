@@ -37,6 +37,8 @@ flowchart LR
 | 2 | Java | IntelliJ 執行 `StockApiJavaApplication` | API 位於 `http://localhost:8081` |
 | 3 | Vue | `cd stock-frontend-vue/stock-tracker && npm run dev` | 開啟 `http://localhost:5173` |
 
+官方開放資料（`official_*` 資料表）另由 GitHub Actions 在私人 repo 每天自動累積，見 [Python README](stock-scraper-python/README.md#雲端每日排程github-actions)。
+
 環境需求：Python 3.11 以上（建議 3.12）、JDK 17 以上、Node.js 20.19 / 22.12 以上（建議 24 LTS）、PostgreSQL（目前使用 Neon）。
 
 ## 環境變數與機敏資料
@@ -63,6 +65,10 @@ flowchart LR
 | `stock_prices` | 日 K：開高低收、成交量 | `(symbol, trade_date)` 唯一 |
 | `stock_indicators` | MA5/10/20/60、MACD、RSI6/12、KD | 與 `stock_prices` 一對一（外鍵） |
 | `strategy_signals` | 某股票某交易日符合某策略 | `(symbol, trade_date, strategy)` 唯一 |
+| `official_daily_quotes` | 證交所 / 櫃買中心開放資料的原始日成交資訊（全部股票與 ETF，每日累積，目前尚未用於畫面） | `(market, code, trade_date)` 唯一 |
+| `official_corporate_actions` | 證交所 / 櫃買中心的除權除息預告（現金股利、配股比例，每日累積） | `(market, code, ex_date)` 唯一 |
+
+資料來源：觀察名單的 K 線、指標與策略使用 yfinance（個人使用）；`official_daily_quotes` 來自臺灣證券交易所與證券櫃檯買賣中心的開放資料，依[政府資料開放授權條款－第 1 版](https://data.gov.tw/license)使用。
 
 資料驗證查詢：[`stock-scraper-python/sql/verify.sql`](stock-scraper-python/sql/verify.sql)
 
@@ -81,6 +87,6 @@ flowchart LR
 | Python | `cd stock-scraper-python && python -m pytest` | 不需要（只用程式內產生的資料） |
 | Java | `cd stock-backend-java/stock-api-java && ./mvnw test` | 需要：啟動完整應用程式並連線資料庫（只讀取），詳見 Java README |
 
-## 待辦
+## 開發路線圖
 
-延後實作與待處理事項見 [TODO.md](TODO.md)。
+規劃中的功能與調整見 [TODO.md](TODO.md)。

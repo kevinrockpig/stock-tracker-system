@@ -134,3 +134,48 @@ WITH t AS (
 (SELECT 'missing' AS diff, * FROM expected EXCEPT SELECT 'missing', symbol, trade_date, strategy FROM strategy_signals)
 UNION ALL
 (SELECT 'extra', symbol, trade_date, strategy FROM strategy_signals EXCEPT SELECT 'extra', * FROM expected);
+
+-- 16. 官方開放資料（證交所 / 櫃買中心）累積狀況：每個市場、每個交易日存了幾檔
+--     開放資料只提供最近一個交易日；若某個交易日缺漏，代表當天沒有執行，且無法補回
+SELECT market, trade_date, COUNT(*) AS securities, COUNT(close_price) AS traded, MIN(source) AS first_source
+FROM official_daily_quotes
+GROUP BY market, trade_date
+ORDER BY trade_date DESC, market;
+
+-- 17. 事件日偵測：一般交易日「漲跌價差 = 收盤 − 前一交易日收盤」，不相等的那天即為除權息、分割或減資等事件
+--     （證交所在除權息日的漲跌價差填 0，所以不能用「收盤 − 漲跌」推算參考價）
+--     有對應的除權除息預告 → 除權息（附現金股利）；沒有 → 可能是分割、減資，需另行查證
+SELECT q.market, q.code, q.name, q.trade_date, q.prev_close, q.close_price, q.change,
+       a.action_type, a.cash_dividend, a.stock_dividend_ratio,
+       CASE WHEN a.code IS NULL THEN '未在預告表：可能為分割 / 減資' ELSE '除權息' END AS event_guess
+FROM (
+    SELECT market, code, name, trade_date, close_price, change,
+           LAG(close_price) OVER (PARTITION BY market, code ORDER BY trade_date) AS prev_close
+    FROM official_daily_quotes
+) q
+LEFT JOIN official_corporate_actions a
+       ON a.market = q.market AND a.code = q.code AND a.ex_date = q.trade_date
+WHERE q.prev_close IS NOT NULL AND q.close_price IS NOT NULL AND q.change IS NOT NULL
+  AND q.change <> q.close_price - q.prev_close
+ORDER BY q.trade_date DESC, q.market, q.code;
+
+-- 18. 官方收盤價與 yfinance 收盤價比對（觀察名單、重疊日期）：收盤價應一致
+--     成交量可能不同（官方成交股數涵蓋的交易類型與 yfinance 不同），這裡只比對收盤價
+SELECT o.code, o.trade_date, o.close_price AS official_close, p.close_price AS yfinance_close,
+       o.volume AS official_volume, p.volume AS yfinance_volume
+FROM official_daily_quotes o
+JOIN stock_prices p ON p.symbol = o.code || CASE o.market WHEN 'TWSE' THEN '.TW' ELSE '.TWO' END
+                   AND p.trade_date = o.trade_date
+ORDER BY o.code, o.trade_date;
+
+-- 19. 除權除息預告（最近與即將發生）：現金股利與配股比例，日後計算價格調整時使用
+SELECT market, code, name, ex_date, action_type, cash_dividend, stock_dividend_ratio, updated_at
+FROM official_corporate_actions
+WHERE ex_date >= CURRENT_DATE - INTERVAL '14 days'
+ORDER BY ex_date, market, code;
+
+-- 20. 資料庫與各資料表大小（Neon 免費方案每個 project 上限 1 GB，超過後無法寫入）
+SELECT pg_size_pretty(pg_database_size(current_database())) AS database_size;
+SELECT relname AS table_name, pg_size_pretty(pg_total_relation_size(relid)) AS total_size, n_live_tup AS rows
+FROM pg_stat_user_tables
+ORDER BY pg_total_relation_size(relid) DESC;

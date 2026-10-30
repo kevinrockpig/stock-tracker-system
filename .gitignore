@@ -12,10 +12,15 @@ __pycache__/
 .env.*
 !.env.example
 logs/
+# 官方開放資料的本機 CSV 備份（雲端排程會另存到私人備份 repo）
+archive/
 
 # Node
 node_modules/
 dist/
+
+# 私人筆記（只留在本機，例如 TODO.private.md：安全、營運與法遵相關待辦）
+*.private.md
 
 # OS
 .DS_Store
