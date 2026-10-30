@@ -15,6 +15,7 @@
 import pandas as pd
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     Date,
     DateTime,
@@ -172,6 +173,8 @@ STAT_VALUE_COLUMNS = (
     "avg_return", "median_return", "avg_win", "avg_loss", "payoff_ratio", "profit_factor",
     "max_loss", "max_consecutive_losses", "avg_holding_days",
     "baseline_trades", "baseline_avg_return", "baseline_win_rate", "buy_hold_return",
+    # 超額報酬 = 交易報酬 − 同一檔股票任意日進場的平均；95% 信賴區間下限 > 0 時 has_edge 為 true
+    "excess_return", "excess_low", "excess_high", "has_edge",
 )
 _INTEGER_STATS = {"trades", "open_trades", "wins", "max_consecutive_losses", "baseline_trades"}
 backtest_stats = Table(
@@ -183,6 +186,7 @@ backtest_stats = Table(
     Column("exit_rule", String(20), nullable=False),
     *(
         Column(name, Date) if name.startswith("period_")
+        else Column(name, Boolean) if name == "has_edge"
         else Column(name, Integer, nullable=False) if name in _INTEGER_STATS
         else Column(name, Numeric(12, 6))
         for name in STAT_VALUE_COLUMNS

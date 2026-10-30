@@ -13,12 +13,14 @@ from scraper.backtest import (
     SELL_TAX_STOCK,
     Bars,
     ExitRule,
+    Trade,
     baseline_returns,
     entry_signals,
     net_return,
     run_strategy,
     simulate,
     summarize,
+    t_critical,
     wilson_interval,
 )
 
@@ -133,13 +135,15 @@ def test_wilson_interval_known_value():
     assert low == pytest.approx(0.3127, abs=1e-4) and high == pytest.approx(0.8318, abs=1e-4)
 
 
+def closed_trade(r, day=0, days=5):
+    d = DAY0 + timedelta(days=day)
+    return Trade(d, d, 100.0, d, 100.0, "hold", 0.0, days, r)
+
+
 def test_summarize_metrics():
-    b = bars(opens=[10] * 3, closes=[10] * 3)
-
-    def trade(r, days=5):
-        return type("T", (), {"net_return": r, "holding_days": days})()
-
-    stats = summarize([trade(0.10), trade(-0.05), trade(-0.02), trade(0.04), trade(None)], baseline=[0.01, -0.01])
+    trades = [closed_trade(0.10, 0), closed_trade(-0.05, 1), closed_trade(-0.02, 2), closed_trade(0.04, 3)]
+    open_trade = Trade(DAY0, DAY0 + timedelta(days=9), 100.0, None, None, None, 0.0, 2, None)
+    stats = summarize({"2330.TW": trades + [open_trade]}, {"2330.TW": [0.01, -0.01]})
     assert stats["trades"] == 4 and stats["open_trades"] == 1 and stats["wins"] == 2
     assert stats["win_rate"] == 0.5
     assert stats["avg_win"] == pytest.approx(0.07) and stats["avg_loss"] == pytest.approx(-0.035)
@@ -147,7 +151,34 @@ def test_summarize_metrics():
     assert stats["profit_factor"] == pytest.approx(0.14 / 0.07)
     assert stats["max_loss"] == -0.05 and stats["max_consecutive_losses"] == 2
     assert stats["baseline_win_rate"] == 0.5 and stats["baseline_avg_return"] == pytest.approx(0.0)
-    assert b.start == 0
+
+
+def test_t_critical_matches_t_table():
+    assert t_critical(10) == pytest.approx(2.228, abs=0.005)
+    assert t_critical(30) == pytest.approx(2.042, abs=0.002)
+    assert t_critical(1000) == pytest.approx(1.962, abs=0.002)
+
+
+def test_excess_return_compares_with_same_stock_baseline():
+    # A 股任意日平均 +1%、B 股 +5%；A 的兩筆交易各 +3%（超額 +2%），B 的一筆 +5%（超額 0）
+    stats = summarize(
+        {"A": [closed_trade(0.03, 0), closed_trade(0.03, 1)], "B": [closed_trade(0.05, 2)]},
+        {"A": [0.0, 0.02], "B": [0.04, 0.06]},
+    )
+    assert stats["excess_return"] == pytest.approx((0.02 + 0.02 + 0.0) / 3)
+    # 基準依交易所屬股票加權，平均報酬 − 基準 = 超額報酬
+    assert stats["avg_return"] - stats["baseline_avg_return"] == pytest.approx(stats["excess_return"])
+
+
+def test_has_edge_only_when_interval_above_zero():
+    steady = [closed_trade(0.03 + 0.001 * (i % 3), i) for i in range(30)]  # 穩定比基準高約 3%
+    noisy = [closed_trade(0.30 if i % 2 else -0.27, i) for i in range(30)]  # 平均也略高，但波動很大
+    baseline = {"A": [0.0, 0.0]}
+    edge = summarize({"A": steady}, baseline)
+    assert edge["has_edge"] and edge["excess_low"] > 0
+    no_edge = summarize({"A": noisy}, baseline)
+    assert not no_edge["has_edge"] and no_edge["excess_low"] < 0 < no_edge["excess_high"]
+    assert summarize({"A": [closed_trade(0.05)]}, baseline)["has_edge"] is False  # 只有 1 筆無法估計區間
 
 
 def test_exit_rules_are_fixed():
