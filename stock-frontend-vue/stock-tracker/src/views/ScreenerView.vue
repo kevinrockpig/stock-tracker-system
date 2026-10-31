@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { fetchBacktests, fetchScreener, fetchStocks, fetchStrategies } from '../api/stocks.js'
 import BacktestResults from '../components/BacktestResults.vue'
-import { falsePassChance } from '../utils/backtest.js'
+import { falsePassChance, groupComparisons } from '../utils/backtest.js'
 import { findHashTarget } from '../utils/scroll.js'
 import { formatChange, formatPercent, formatPrice, formatRate, trendClass } from '../utils/format.js'
 
@@ -301,8 +301,8 @@ watch(selectedScope, (scope) => {
         <p v-else class="status">這個範圍還沒有「{{ selectedStrategy.name }}」的回測結果。</p>
         <p v-if="selectedScope === ALL_SCOPE && stocks.length" class="meta">選擇個股，可在 K 線圖查看每筆交易的進出場點。</p>
         <p class="caution">
-          同時比較了 {{ scopeBacktest.comparisons }} 組（策略 × 出場方式）。即使全都沒有真正的優勢，也可能有組別剛好通過（機率最多約
-          {{ falsePassChance(scopeBacktest.comparisons) }}%）；「有優勢」代表值得繼續觀察，不是保證。過去的績效不代表未來。
+          同時比較了 {{ groupComparisons(scopeBacktest) }} 組（策略 × 出場方式）。即使全都沒有真正的優勢，也可能有組別剛好通過（機率最多約
+          {{ falsePassChance(groupComparisons(scopeBacktest)) }}%）；「有優勢」代表值得繼續觀察，不是保證。過去的績效不代表未來。
         </p>
       </template>
       <p v-else-if="backtestLoading" class="status">回測結果載入中…</p>

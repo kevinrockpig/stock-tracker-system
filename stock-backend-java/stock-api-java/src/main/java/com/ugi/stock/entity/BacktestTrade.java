@@ -50,7 +50,7 @@ public class BacktestTrade {
     @Column(name = "exit_price")
     private BigDecimal exitPrice;
 
-    // hold：持有期滿 / trailing：移動停利 / max_hold：移動停利達最長天數
+    // hold：持有期滿 / trailing：移動停利 / max_hold：移動停利達最長天數 / ma_break：跌破季線
     @Column(name = "exit_reason", length = 10)
     private String exitReason;
 

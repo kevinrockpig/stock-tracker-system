@@ -54,7 +54,9 @@ public class StrategyService {
         Map<String, StockQuoteResponse> quotes = stockService.getLatestQuotes().stream()
                 .collect(Collectors.toMap(StockQuoteResponse::symbol, Function.identity()));
 
+        // 只列出目前觀察名單中的股票（已移除的股票資料保留，但不再列出）
         List<Match> matches = signalsBySymbol.entrySet().stream()
+                .filter(entry -> quotes.containsKey(entry.getKey()))
                 .map(entry -> {
                     LocalDate lastSignalDate = entry.getValue().stream()
                             .map(StrategySignal::getTradeDate)
@@ -75,6 +77,6 @@ public class StrategyService {
     }
 
     static StrategyResponse toResponse(Strategy strategy) {
-        return new StrategyResponse(strategy.code(), strategy.label(), strategy.description());
+        return new StrategyResponse(strategy.code(), strategy.label(), strategy.description(), strategy.swingOnly());
     }
 }

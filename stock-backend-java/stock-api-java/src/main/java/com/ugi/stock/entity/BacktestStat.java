@@ -125,4 +125,28 @@ public class BacktestStat {
     // 超額報酬 95% 信賴區間下限 > 0，且前後兩段的超額報酬都 > 0
     @Column(name = "has_edge")
     private Boolean hasEdge;
+
+    // 信賴區間依進場月份分群計算時的月份數（後來新增，舊資料為 null）
+    @Column(name = "excess_clusters")
+    private Integer excessClusters;
+
+    // 資金曲線（起始 1 元，持有期間依收盤計值）：累積報酬、年化報酬、最大回撤、在場時間比例
+    @Column(name = "total_return")
+    private BigDecimal totalReturn;
+
+    @Column(name = "cagr")
+    private BigDecimal cagr;
+
+    @Column(name = "max_drawdown")
+    private BigDecimal maxDrawdown;
+
+    @Column(name = "exposure")
+    private BigDecimal exposure;
+
+    // 同期買進持有的年化報酬與最大回撤
+    @Column(name = "bh_cagr")
+    private BigDecimal bhCagr;
+
+    @Column(name = "bh_max_drawdown")
+    private BigDecimal bhMaxDrawdown;
 }

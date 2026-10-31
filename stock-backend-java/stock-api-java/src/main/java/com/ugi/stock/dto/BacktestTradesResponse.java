@@ -20,7 +20,7 @@ public record BacktestTradesResponse(
      *
      * @param signalDate  訊號日（收盤後出現訊號）
      * @param entryDate   進場日（訊號日的下一個交易日，以開盤價買進）
-     * @param exitReason  hold：持有期滿 / trailing：跌破移動停利線 / max_hold：移動停利達最長天數
+     * @param exitReason  hold：持有期滿 / trailing：跌破移動停利線 / max_hold：移動停利達最長天數 / ma_break：跌破季線
      * @param dividends   持有期間領到的每股現金股利
      * @param holdingDays 持有的交易日數（含進場日與出場日）
      * @param netReturn   扣成本、含股利的報酬率（0.05 = 5%）

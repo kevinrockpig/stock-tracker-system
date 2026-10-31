@@ -17,6 +17,12 @@ export const EXIT_REASONS = {
   hold: '持有期滿',
   trailing: '跌破移動停利線',
   max_hold: '達最長持有天數',
+  ma_break: '跌破季線',
+}
+
+// 每一組（短線 / 波段）同時比較的組數；API 的 horizons 為 [{ code, name, comparisons }]
+export function groupComparisons(backtest) {
+  return Math.max(0, ...(backtest?.horizons ?? []).map((horizon) => horizon.comparisons))
 }
 
 // 同時比較 n 組、而且全都沒有真正的優勢時，至少一組「剛好通過」的機率上限（%）

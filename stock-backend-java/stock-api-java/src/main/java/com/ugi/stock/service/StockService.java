@@ -3,6 +3,7 @@ package com.ugi.stock.service;
 import com.ugi.stock.dto.StockHistoryResponse;
 import com.ugi.stock.dto.StockHistoryResponse.Indicators;
 import com.ugi.stock.dto.StockHistoryResponse.PriceBar;
+import com.ugi.stock.dto.StockGroupResponse;
 import com.ugi.stock.dto.StockQuoteResponse;
 import com.ugi.stock.entity.Stock;
 import com.ugi.stock.entity.StockIndicator;
@@ -20,6 +21,8 @@ import org.springframework.web.server.ResponseStatusException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -42,12 +45,22 @@ public class StockService {
     private final StockIndicatorRepository stockIndicatorRepository;
 
     /**
-     * 所有股票的最新報價（依代號排序）。
-     * 觀察名單只有數檔，逐檔查詢最新兩筆即可；名單變大時再改為單一查詢。
+     * 觀察名單所有股票的最新報價（依代號排序）。最新兩個交易日的行情以一次查詢取得（名單有數十檔）。
      */
     public List<StockQuoteResponse> getLatestQuotes() {
-        return stockRepository.findAll(Sort.by("symbol")).stream()
-                .map(this::toLatestQuote)
+        Map<String, List<StockPrice>> recentBySymbol = stockPriceRepository.findLatestTwoForWatchlist().stream()
+                .sorted(Comparator.comparing(StockPrice::getTradeDate).reversed())
+                .collect(Collectors.groupingBy(StockPrice::getSymbol));
+        return stockRepository.findByGroupCodesIsNotNull(Sort.by("symbol")).stream()
+                .map(stock -> toLatestQuote(stock, recentBySymbol.getOrDefault(stock.getSymbol(), List.of())))
+                .toList();
+    }
+
+    public List<StockGroupResponse> getGroups() {
+        List<Stock> watchlist = stockRepository.findByGroupCodesIsNotNull(Sort.unsorted());
+        return Arrays.stream(StockGroup.values())
+                .map(group -> new StockGroupResponse(group.code(), group.label(),
+                        (int) watchlist.stream().filter(stock -> stock.groups().contains(group.code())).count()))
                 .toList();
     }
 
@@ -104,15 +117,15 @@ public class StockService {
         );
     }
 
-    private StockQuoteResponse toLatestQuote(Stock stock) {
-        List<StockPrice> recent = stockPriceRepository.findTop2BySymbolOrderByTradeDateDesc(stock.getSymbol());
+    // recent：最新兩個交易日，依日期由新到舊
+    private StockQuoteResponse toLatestQuote(Stock stock, List<StockPrice> recent) {
         StockPrice latest = recent.isEmpty() ? null : recent.get(0);
         StockPrice previous = recent.size() > 1 ? recent.get(1) : null;
 
         if (latest == null) {
             // 有股票資料但尚未寫入任何行情：仍回傳，讓前端顯示「無資料」
-            return new StockQuoteResponse(stock.getSymbol(), stock.getName(), stock.getCurrency(),
-                    QUOTE_TYPE_DAILY_CLOSE, null, null, null, null, null, null, null, null, null);
+            return new StockQuoteResponse(stock.getSymbol(), stock.getName(), stock.getCurrency(), stock.groups(),
+                    stock.getListedDate(), QUOTE_TYPE_DAILY_CLOSE, null, null, null, null, null, null, null, null, null);
         }
 
         BigDecimal previousClose = previous == null ? null : previous.getClosePrice();
@@ -129,6 +142,8 @@ public class StockService {
                 stock.getSymbol(),
                 stock.getName(),
                 stock.getCurrency(),
+                stock.groups(),
+                stock.getListedDate(),
                 QUOTE_TYPE_DAILY_CLOSE,
                 latest.getTradeDate(),
                 latest.getClosePrice(),

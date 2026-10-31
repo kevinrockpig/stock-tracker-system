@@ -38,13 +38,14 @@ export DB_URL='jdbc:postgresql://<host>:5432/<db>?sslmode=require' DB_USERNAME='
 
 | 方法與路徑 | 說明 |
 |---|---|
-| `GET /api/stocks` | 股票清單與最新日收盤報價（含前一交易日收盤、漲跌、漲跌幅） |
+| `GET /api/stocks` | 觀察名單與最新日收盤報價（含前一交易日收盤、漲跌、漲跌幅、所屬組別、上市日期） |
+| `GET /api/groups` | 觀察名單的組別（`TW50` 0050 成分股、`CUSTOM` 自選）與股票數 |
 | `GET /api/stocks/{symbol}/history?from=&to=` | 歷史日 K 與當日技術指標（MA、MACD、RSI、KD、ATR14），`from` / `to` 為 `YYYY-MM-DD`，皆可省略 |
 | `GET /api/stocks/{symbol}/levels` | 最新的參考價位（供下一個交易日參考）：ATR 停損、60 日波段與黃金分割、參考價與漲跌停價、除權息預告；尚未計算時回 404 |
 | `GET /api/strategies` | 可用的選股策略（代碼、中文名稱、成立條件） |
 | `GET /api/screener?strategy=&days=` | 最近 `days` 個交易日（1～60，預設 1）內符合策略的股票 |
-| `GET /api/backtests?scope=` | 策略回測統計（每個策略 × 出場規則一筆）：勝率與信賴區間、平均報酬、相對任意日進場的超額報酬與區間、前後兩段、是否有優勢、買進持有；`scope` 為 `ALL`（預設，全部合併）或股票代號 |
-| `GET /api/stocks/{symbol}/trades?strategy=&exitRule=` | 某檔股票的歷史回測交易（進出場日期、價格、股利、報酬），`exitRule` 為 `hold_5`、`hold_10`、`hold_20`、`trailing_atr` |
+| `GET /api/backtests?scope=` | 策略回測統計（每個策略 × 出場規則一筆）：勝率與信賴區間、平均報酬、相對任意日進場的超額報酬與區間（依進場月份分群）、前後兩段、是否有優勢、資金曲線（年化、最大回撤、在場時間）與買進持有；出場規則分短線 / 波段兩組（`horizons` 含各組比較組數）；`scope` 為 `ALL`（預設）、組別代碼或股票代號 |
+| `GET /api/stocks/{symbol}/trades?strategy=&exitRule=` | 某檔股票的歷史回測交易（進出場日期、價格、股利、報酬）；`exitRule` 短線為 `hold_5`、`hold_10`、`hold_20`、`trailing_atr`，波段為 `ma60_exit`、`trailing_nocap`；波段策略只搭配波段出場（其他組合回 400） |
 
 ```bash
 curl http://localhost:8081/api/stocks
@@ -52,6 +53,8 @@ curl "http://localhost:8081/api/stocks/2330.TW/history?from=2026-10-01"
 curl http://localhost:8081/api/stocks/2330.TW/levels
 curl "http://localhost:8081/api/screener?strategy=golden_cross&days=10"
 curl "http://localhost:8081/api/backtests"
+curl "http://localhost:8081/api/backtests?scope=TW50"
+curl http://localhost:8081/api/groups
 curl "http://localhost:8081/api/stocks/2330.TW/trades?strategy=golden_cross&exitRule=trailing_atr"
 ```
 
@@ -65,9 +68,10 @@ curl "http://localhost:8081/api/stocks/2330.TW/trades?strategy=golden_cross&exit
 src/main/java/com/ugi/stock/
 ├── controller/   StockController（/api/stocks）、StrategyController（/api/strategies、/api/screener）、
 │                 BacktestController（/api/backtests、/api/stocks/{symbol}/trades）、
-│                 ReferenceLevelController（/api/stocks/{symbol}/levels）
+│                 ReferenceLevelController（/api/stocks/{symbol}/levels）、StockGroupController（/api/groups）
 ├── service/      StockService、StrategyService、BacktestService、ReferenceLevelService、
-│                 Strategy / ExitRule（策略與出場規則代碼，須與 Python 的 STRATEGIES / EXIT_RULES 一致）
+│                 Strategy / ExitRule / Horizon / StockGroup
+│                 （策略、出場規則、短線 / 波段、組別代碼，須與 Python 的 STRATEGIES / EXIT_RULES / STOCK_GROUPS 一致）
 ├── repository/   Spring Data JPA 查詢
 ├── entity/       對應資料表，全部標記 @Immutable（唯讀）
 └── dto/          API 回應格式（Java record）

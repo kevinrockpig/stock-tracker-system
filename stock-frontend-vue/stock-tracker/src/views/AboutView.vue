@@ -2,7 +2,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { fetchBacktests, fetchStrategies } from '../api/stocks.js'
-import { BACKTEST_RULES, falsePassChance } from '../utils/backtest.js'
+import { BACKTEST_RULES, falsePassChance, groupComparisons } from '../utils/backtest.js'
 import { MA_LINES, SUB_CHARTS } from '../utils/chartConfig.js'
 import { formatRate } from '../utils/format.js'
 import { scrollMotion } from '../utils/scroll.js'
@@ -271,9 +271,9 @@ onBeforeUnmount(() => {
           <li>觀察名單是現在挑選的股票（倖存者偏差）：過去表現好的股票，回測結果自然比較好看。</li>
           <li>股價與除權息資料來自 Yahoo Finance，偶有缺漏；減資退還的現金（例如鴻海 2018 年減資）沒有計入。</li>
           <li>
-            同時比較了{{ backtest ? ` ${backtest.comparisons} 組` : '多組' }}（策略 × 出場方式）。即使全都沒有真正的優勢，也可能有組別剛好通過<template
+            同時比較了{{ backtest ? ` ${groupComparisons(backtest)} 組` : '多組' }}（策略 × 出場方式）。即使全都沒有真正的優勢，也可能有組別剛好通過<template
               v-if="backtest"
-              >（機率最多約 {{ falsePassChance(backtest.comparisons) }}%）</template
+              >（機率最多約 {{ falsePassChance(groupComparisons(backtest)) }}%）</template
             >，所以「有優勢」代表值得繼續觀察，不是保證。
           </li>
           <li>規則與參數事先固定，沒有為了讓結果好看而反覆調整；即便如此，過去的結果也不代表未來。</li>

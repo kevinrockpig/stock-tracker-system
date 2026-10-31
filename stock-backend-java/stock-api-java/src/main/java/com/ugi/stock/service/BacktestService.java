@@ -1,6 +1,7 @@
 package com.ugi.stock.service;
 
 import com.ugi.stock.dto.BacktestResponse;
+import com.ugi.stock.dto.BacktestResponse.HorizonResponse;
 import com.ugi.stock.dto.BacktestResponse.Result;
 import com.ugi.stock.dto.BacktestTradesResponse;
 import com.ugi.stock.dto.ExitRuleResponse;
@@ -11,6 +12,7 @@ import com.ugi.stock.repository.BacktestStatRepository;
 import com.ugi.stock.repository.BacktestTradeRepository;
 import com.ugi.stock.repository.StockRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,11 +35,26 @@ public class BacktestService {
     private final StockRepository stockRepository;
 
     /**
-     * 某範圍的回測統計。Python 端若有 Java 尚未定義的策略或出場規則（例如剛新增、Java 還沒更新），先略過。
+     * 某範圍的回測統計。scope：ALL、組別代碼（StockGroup）或股票代號。
+     * Python 端若有 Java 尚未定義的策略或出場規則（例如剛新增、Java 還沒更新），先略過。
      */
     public BacktestResponse getStats(String scope) {
-        if (!ALL_SCOPE.equals(scope) && !stockRepository.existsById(scope)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "找不到股票代號：" + scope);
+        String scopeName;
+        int scopeStocks;
+        if (ALL_SCOPE.equals(scope)) {
+            scopeName = "全部合併";
+            scopeStocks = stockRepository.findByGroupCodesIsNotNull(Sort.unsorted()).size();
+        } else if (StockGroup.fromCode(scope).isPresent()) {
+            StockGroup group = StockGroup.fromCode(scope).orElseThrow();
+            scopeName = group.label();
+            scopeStocks = (int) stockRepository.findByGroupCodesIsNotNull(Sort.unsorted()).stream()
+                    .filter(stock -> stock.groups().contains(group.code()))
+                    .count();
+        } else {
+            Stock stock = stockRepository.findById(scope)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "找不到股票代號或組別：" + scope));
+            scopeName = stock.getName();
+            scopeStocks = 1;
         }
 
         List<BacktestStat> stats = backtestStatRepository.findByScope(scope).stream()
@@ -50,12 +67,19 @@ public class BacktestService {
 
         // 所有統計共用同一個期間與切分日（同一次計算產生）
         BacktestStat first = stats.isEmpty() ? null : stats.get(0);
+        List<HorizonResponse> horizons = Arrays.stream(Horizon.values())
+                .map(horizon -> new HorizonResponse(horizon.code(), horizon.label(), (int) stats.stream()
+                        .filter(stat -> ExitRule.fromCode(stat.getExitRule()).orElseThrow().horizon() == horizon)
+                        .count()))
+                .toList();
         return new BacktestResponse(
                 scope,
+                scopeName,
+                scopeStocks,
                 first == null ? null : first.getPeriodStart(),
                 first == null ? null : first.getPeriodEnd(),
                 first == null ? null : first.getSplitDate(),
-                stats.size(),
+                horizons,
                 Arrays.stream(ExitRule.values()).map(BacktestService::toResponse).toList(),
                 stats.stream().map(BacktestService::toResult).toList()
         );
@@ -85,7 +109,7 @@ public class BacktestService {
     }
 
     public static ExitRuleResponse toResponse(ExitRule rule) {
-        return new ExitRuleResponse(rule.code(), rule.label(), rule.description());
+        return new ExitRuleResponse(rule.code(), rule.label(), rule.description(), rule.horizon().code());
     }
 
     private static Result toResult(BacktestStat stat) {
@@ -114,11 +138,18 @@ public class BacktestService {
                 stat.getExcessReturn(),
                 stat.getExcessLow(),
                 stat.getExcessHigh(),
+                stat.getExcessClusters(),
                 stat.getTradesFirst(),
                 stat.getExcessFirst(),
                 stat.getTradesSecond(),
                 stat.getExcessSecond(),
-                Objects.equals(stat.getHasEdge(), Boolean.TRUE)
+                Objects.equals(stat.getHasEdge(), Boolean.TRUE),
+                stat.getTotalReturn(),
+                stat.getCagr(),
+                stat.getMaxDrawdown(),
+                stat.getExposure(),
+                stat.getBhCagr(),
+                stat.getBhMaxDrawdown()
         );
     }
 }

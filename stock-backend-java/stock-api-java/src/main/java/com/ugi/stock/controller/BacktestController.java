@@ -4,6 +4,7 @@ import com.ugi.stock.dto.BacktestResponse;
 import com.ugi.stock.dto.BacktestTradesResponse;
 import com.ugi.stock.service.BacktestService;
 import com.ugi.stock.service.ExitRule;
+import com.ugi.stock.service.Horizon;
 import com.ugi.stock.service.Strategy;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -46,6 +47,13 @@ public class BacktestController {
         ExitRule targetRule = ExitRule.fromCode(normalize(exitRule))
                 .orElseThrow(() -> badRequest("出場規則", exitRule,
                         Arrays.stream(ExitRule.values()).map(ExitRule::code)));
+        // 波段策略只回測波段出場規則（與 Python 端 backtest.rules_for 一致），其他組合沒有資料
+        if (targetStrategy.swingOnly() && targetRule.horizon() != Horizon.SWING) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "「" + targetStrategy.label()
+                    + "」為波段策略，只搭配波段出場規則：" + Arrays.stream(ExitRule.values())
+                    .filter(rule -> rule.horizon() == Horizon.SWING).map(ExitRule::code)
+                    .collect(Collectors.joining("、")));
+        }
         return backtestService.getTrades(symbol.trim().toUpperCase(Locale.ROOT), targetStrategy, targetRule);
     }
 
