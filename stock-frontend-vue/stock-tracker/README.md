@@ -7,6 +7,7 @@
 | 股票清單 | `/?q=南亞&group=CUSTOM&sort=change` | `GET /api/stocks`、`GET /api/groups` |
 | 個股 K 線圖 | `/stocks/2330.TW?strategy=ma_bullish&exitRule=hold_5` | `GET /api/stocks/{symbol}/history?from=…`、`GET /api/stocks/{symbol}/levels`、`GET /api/backtests?scope={symbol}`、`GET /api/stocks/{symbol}/trades?strategy=…&exitRule=…` |
 | 策略選股 | `/screener?strategy=high_120&days=10&scope=TW50` | `GET /api/strategies`、`GET /api/screener?strategy=…&days=…`、`GET /api/stocks`、`GET /api/groups`、`GET /api/backtests?scope=…` |
+| 回測比較（投資組合） | `/portfolio?scope=TW50&sort=cagr&strategy=high_120` | `GET /api/groups`、`GET /api/portfolio-backtests?scope=…` |
 | 使用說明 | `/about#backtest` | `GET /api/strategies`、`GET /api/backtests` |
 
 股票清單：可搜尋代號或名稱、依組別（0050 成分股 / 自選）篩選、依代號 / 漲跌幅 / 成交量排序，條件記在網址；每檔標示所屬組別。
@@ -26,6 +27,10 @@
   持有期間底色紅為獲利、綠為虧損、藍為持有中，tooltip 顯示交易細節；下方顯示這檔股票的判定與全部交易清單。
 - 選「移動停利」出場方式時，K 線圖另畫出每筆交易的移動停利線（進場後最高收盤價 − 3 × 當天 ATR，與 Python 回測的計算相同）。
 - 判定文字與說明頁的成本數字集中在 `src/utils/backtest.js`（數字須與 Python 的 `scraper/backtest.py` 一致）。
+
+回測比較頁（`/portfolio`）：投資組合回測（一筆共用資金、最多同時持有 10 檔）的 24 組結果，可依 Calmar / 年化報酬 / 最大回撤排序、
+切換全部合併 / 組別；最上方固定顯示同一批股票的買進持有（判定基準）與 0050 ETF（參考），每組標示標準 1、標準 2 與「有效策略」，
+高於買進持有的 Calmar 以藍色粗體標示。從策略選股頁的回測區塊連過來時（`strategy`）會標示該策略的列。手機寬度時一列一張卡片。
 
 參考價位（個股頁，資料由 Python 每日收盤後計算）：價位表依價格由高到低列出漲跌停、60 日高低點、黃金分割、收盤價、ATR 停損，
 並顯示距收盤的百分比；有除權息預告時顯示提醒（下一個交易日除息時說明參考價已扣除股利）。

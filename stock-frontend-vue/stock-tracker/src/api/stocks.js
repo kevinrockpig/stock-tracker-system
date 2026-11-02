@@ -87,3 +87,8 @@ export function fetchTrades(symbol, strategy, exitRule) {
 export function fetchLevels(symbol) {
   return getJson(`/api/stocks/${encodeURIComponent(symbol)}/levels`)
 }
+
+// 投資組合回測（共用資金、最多同時持有 10 檔）：scope 為 ALL 或組別代碼
+export function fetchPortfolio(scope = 'ALL') {
+  return getJson(`/api/portfolio-backtests?${new URLSearchParams({ scope })}`)
+}

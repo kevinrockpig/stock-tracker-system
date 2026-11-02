@@ -362,6 +362,15 @@ watch(selectedScope, (scope) => {
         </section>
         <p v-if="!sections.length" class="status">這個範圍還沒有「{{ selectedStrategy.name }}」的回測結果。</p>
         <p v-if="!scopeIsStock && stocks.length" class="meta">選擇個股，可在 K 線圖查看每筆交易的進出場點。</p>
+        <p class="meta">
+          整套策略用一筆資金實際操作的表現（年化、回撤與買進持有比較）：<RouterLink
+            :to="{
+              name: 'portfolio',
+              query: { strategy: selectedCode, ...(scopeIsStock || selectedScope === ALL_SCOPE ? {} : { scope: selectedScope }) },
+            }"
+            >回測比較（投資組合）→</RouterLink
+          >
+        </p>
       </template>
       <p v-else-if="backtestLoading" class="status">回測結果載入中…</p>
       <div v-else-if="backtestError" class="status error">

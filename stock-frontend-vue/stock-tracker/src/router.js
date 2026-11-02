@@ -32,6 +32,8 @@ export default createRouter({
       component: () => import('./views/StockDetailView.vue'),
       props: true,
     },
+    // 投資組合回測比較，例如 /portfolio?scope=TW50&sort=cagr&strategy=high_120（strategy 為要標示的策略）
+    { path: '/portfolio', name: 'portfolio', component: () => import('./views/PortfolioView.vue') },
     // 使用說明與免責聲明；各段落可用 #indicators 等錨點直接連結
     { path: '/about', name: 'about', component: AboutView },
     { path: '/:pathMatch(.*)*', redirect: '/' },

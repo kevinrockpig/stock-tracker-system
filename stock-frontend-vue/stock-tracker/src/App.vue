@@ -11,6 +11,7 @@ const route = useRoute()
     <nav class="site-nav" aria-label="主選單">
       <RouterLink to="/" :class="{ 'router-link-active': route.name === 'stock-detail' }">股票清單</RouterLink>
       <RouterLink :to="{ name: 'screener' }">策略選股</RouterLink>
+      <RouterLink :to="{ name: 'portfolio' }">回測比較</RouterLink>
       <RouterLink :to="{ name: 'about' }">使用說明</RouterLink>
     </nav>
     <RouterView />

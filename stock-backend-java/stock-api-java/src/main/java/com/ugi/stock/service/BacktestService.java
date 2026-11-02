@@ -22,6 +22,8 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -39,23 +41,9 @@ public class BacktestService {
      * Python 端若有 Java 尚未定義的策略或出場規則（例如剛新增、Java 還沒更新），先略過。
      */
     public BacktestResponse getStats(String scope) {
-        String scopeName;
-        int scopeStocks;
-        if (ALL_SCOPE.equals(scope)) {
-            scopeName = "全部合併";
-            scopeStocks = stockRepository.findByGroupCodesIsNotNull(Sort.unsorted()).size();
-        } else if (StockGroup.fromCode(scope).isPresent()) {
-            StockGroup group = StockGroup.fromCode(scope).orElseThrow();
-            scopeName = group.label();
-            scopeStocks = (int) stockRepository.findByGroupCodesIsNotNull(Sort.unsorted()).stream()
-                    .filter(stock -> stock.groups().contains(group.code()))
-                    .count();
-        } else {
-            Stock stock = stockRepository.findById(scope)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "找不到股票代號或組別：" + scope));
-            scopeName = stock.getName();
-            scopeStocks = 1;
-        }
+        ScopeInfo info = describeScope(scope, true);
+        String scopeName = info.name();
+        int scopeStocks = info.stocks();
 
         List<BacktestStat> stats = backtestStatRepository.findByScope(scope).stream()
                 .filter(stat -> Strategy.fromCode(stat.getStrategy()).isPresent())
@@ -106,6 +94,34 @@ public class BacktestService {
 
         return new BacktestTradesResponse(stock.getSymbol(), stock.getName(),
                 StrategyService.toResponse(strategy), toResponse(exitRule), trades);
+    }
+
+    /** 範圍的中文名稱與股票數。 */
+    public record ScopeInfo(String name, int stocks) {
+    }
+
+    /**
+     * scope：ALL、組別代碼（StockGroup），或 allowStock 為 true 時的股票代號；其他回 404。
+     */
+    public ScopeInfo describeScope(String scope, boolean allowStock) {
+        if (ALL_SCOPE.equals(scope)) {
+            return new ScopeInfo("全部合併", stockRepository.findByGroupCodesIsNotNull(Sort.unsorted()).size());
+        }
+        Optional<StockGroup> group = StockGroup.fromCode(scope);
+        if (group.isPresent()) {
+            int count = (int) stockRepository.findByGroupCodesIsNotNull(Sort.unsorted()).stream()
+                    .filter(stock -> stock.groups().contains(group.get().code()))
+                    .count();
+            return new ScopeInfo(group.get().label(), count);
+        }
+        if (allowStock) {
+            Stock stock = stockRepository.findById(scope)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "找不到股票代號或組別：" + scope));
+            return new ScopeInfo(stock.getName(), 1);
+        }
+        throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                "找不到範圍：" + scope + "，可用：ALL、" + Arrays.stream(StockGroup.values())
+                        .map(StockGroup::code).collect(Collectors.joining("、")));
     }
 
     public static ExitRuleResponse toResponse(ExitRule rule) {
