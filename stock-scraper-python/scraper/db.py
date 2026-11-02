@@ -9,6 +9,7 @@
   backtest_trades   策略回測的每筆交易（見 backtest.py）
   backtest_stats    策略回測統計：每個（策略, 股票或全部, 出場規則）一筆
   portfolio_stats   投資組合回測統計：每個（策略, 範圍, 出場規則）一筆（見 portfolio.py）
+  paper_accounts    交易計畫的模擬帳戶（每個觀察中策略一個，見 paper.py）；paper_positions / paper_equity / trade_plans 為其持股、每日資金與計畫
   reference_levels  參考價位：每檔股票每個交易日收盤後計算一筆（見 levels.py），保留歷史供日後檢視
   official_daily_quotes       證交所 / 櫃買中心開放資料的原始日成交資訊（每日累積，與上面幾張表獨立）
   official_corporate_actions  證交所 / 櫃買中心的除權除息預告（每日累積）
@@ -235,6 +236,79 @@ portfolio_stats = Table(
     ),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     UniqueConstraint("strategy", "scope", "exit_rule", name="uq_portfolio_stats_key"),
+)
+
+
+# 交易計畫與往後實測（見 paper.py）：每個交易日只處理一次並保存，處理過的日子不會重算
+_MONEY = Numeric(18, 6)
+paper_accounts = Table(
+    "paper_accounts",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("strategy", String(30), nullable=False),
+    Column("exit_rule", String(20), nullable=False),
+    Column("slots", Integer, nullable=False),
+    Column("initial_capital", _MONEY, nullable=False),
+    Column("inception_date", Date, nullable=False),  # 啟用日：從這天收盤後開始產生計畫
+    Column("last_processed", Date, nullable=False),  # 已處理到的交易日
+    Column("cash", _MONEY, nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("strategy", "exit_rule", name="uq_paper_accounts_strategy_rule"),
+)
+paper_positions = Table(
+    "paper_positions",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("account_id", BigInteger, ForeignKey("paper_accounts.id"), nullable=False),
+    Column("symbol", String(20), ForeignKey("stocks.symbol"), nullable=False),
+    Column("signal_date", Date, nullable=False),
+    Column("entry_date", Date, nullable=False),
+    Column("entry_price", Numeric(12, 4), nullable=False),
+    Column("shares", _MONEY, nullable=False),  # 可為零股（依金額買進）
+    Column("cost", _MONEY, nullable=False),  # 買進金額（含手續費）
+    Column("highest_close", Numeric(12, 4)),
+    Column("held_days", Integer, nullable=False),
+    Column("dividends", _MONEY, nullable=False),  # 已入帳的現金股利（元）
+    Column("exit_date", Date),  # NULL：持有中
+    Column("exit_price", Numeric(12, 4)),
+    Column("exit_reason", String(10)),
+    Column("net_return", Numeric(12, 6)),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Index("ix_paper_positions_account", "account_id", "exit_date"),
+)
+paper_equity = Table(
+    "paper_equity",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("account_id", BigInteger, ForeignKey("paper_accounts.id"), nullable=False),
+    Column("trade_date", Date, nullable=False),
+    Column("cash", _MONEY, nullable=False),
+    Column("holdings", _MONEY, nullable=False),
+    Column("equity", _MONEY, nullable=False),
+    Column("positions", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("account_id", "trade_date", name="uq_paper_equity_account_date"),
+)
+trade_plans = Table(
+    "trade_plans",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("account_id", BigInteger, ForeignKey("paper_accounts.id"), nullable=False),
+    Column("plan_date", Date, nullable=False),  # 依這天收盤產生，於下一個交易日執行
+    Column("symbol", String(20), ForeignKey("stocks.symbol"), nullable=False),
+    Column("action", String(4), nullable=False),  # buy / sell
+    Column("reason", String(30), nullable=False),  # 買進：策略代碼；賣出：trailing / ma_break
+    Column("priority", Integer, nullable=False),  # 同一天多筆買進的執行順序（隨機排定）
+    Column("close_price", Numeric(12, 4)),
+    Column("reference_price", Numeric(12, 4)),
+    Column("skip_above", Numeric(12, 4)),  # 開盤高於此價視為接近漲停而放棄（除息日會再扣股利）
+    Column("trailing_line", Numeric(12, 4)),
+    Column("atr_stop", Numeric(12, 4)),
+    Column("status", String(20), nullable=False),  # pending / executed / skipped_*
+    Column("executed_date", Date),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("account_id", "plan_date", "symbol", "action", name="uq_trade_plans_key"),
 )
 
 
@@ -632,6 +706,86 @@ def sync_portfolio_stats(conn: Connection, rows: list[dict]) -> dict[str, int]:
     if stale:
         conn.execute(portfolio_stats.delete().where(portfolio_stats.c.id.in_(stale)))
     return {**counts, "deleted": len(stale)}
+
+
+def load_paper_state(conn: Connection, strategy: str, exit_rule: str):
+    """模擬帳戶目前的狀態（持有中部位、待執行計畫、最近一次的總資金）；尚未啟用時回傳 None。"""
+    from scraper.paper import Account, Plan, Position  # 避免循環匯入
+
+    row = conn.execute(
+        select(paper_accounts).where(paper_accounts.c.strategy == strategy, paper_accounts.c.exit_rule == exit_rule)
+    ).mappings().first()
+    if row is None:
+        return None
+    f = lambda v: None if v is None else float(v)  # noqa: E731
+    positions = [
+        Position(r["symbol"], r["signal_date"], r["entry_date"], float(r["entry_price"]), float(r["shares"]),
+                 float(r["cost"]), f(r["highest_close"]), r["held_days"], float(r["dividends"]), id=r["id"])
+        for r in conn.execute(
+            select(paper_positions).where(paper_positions.c.account_id == row["id"], paper_positions.c.exit_date.is_(None))
+        ).mappings()
+    ]
+    pending = [
+        Plan(r["plan_date"], r["symbol"], r["action"], r["reason"], r["priority"], f(r["close_price"]),
+             f(r["reference_price"]), f(r["skip_above"]), f(r["trailing_line"]), f(r["atr_stop"]), id=r["id"])
+        for r in conn.execute(
+            select(trade_plans).where(trade_plans.c.account_id == row["id"], trade_plans.c.status == "pending")
+        ).mappings()
+    ]
+    equity = conn.execute(
+        select(paper_equity.c.equity).where(paper_equity.c.account_id == row["id"])
+        .order_by(paper_equity.c.trade_date.desc()).limit(1)
+    ).scalar()
+    return Account(
+        strategy, exit_rule, row["slots"], float(row["initial_capital"]), row["inception_date"], row["last_processed"],
+        float(row["cash"]), positions, pending, float(equity) if equity is not None else float(row["initial_capital"]),
+        id=row["id"],
+    )
+
+
+def save_paper_day(conn: Connection, account, result) -> None:
+    """寫入一個交易日的處理結果：帳戶、部位、計畫、每日資金（同一個交易中完成）。"""
+    values = {"slots": account.slots, "initial_capital": account.initial_capital, "inception_date": account.inception_date,
+              "last_processed": account.last_processed, "cash": account.cash}
+    if account.id is None:
+        account.id = conn.execute(
+            paper_accounts.insert().values(strategy=account.strategy, exit_rule=account.exit_rule, **values)
+            .returning(paper_accounts.c.id)
+        ).scalar_one()
+    else:
+        conn.execute(paper_accounts.update().where(paper_accounts.c.id == account.id).values(**values, updated_at=func.now()))
+
+    def position_values(p):
+        return {"symbol": p.symbol, "signal_date": p.signal_date, "entry_date": p.entry_date, "entry_price": p.entry_price,
+                "shares": p.shares, "cost": p.cost, "highest_close": p.highest_close, "held_days": p.held_days,
+                "dividends": p.dividends, "exit_date": p.exit_date, "exit_price": p.exit_price,
+                "exit_reason": p.exit_reason, "net_return": p.net_return}
+    for p in [*result.opened, *result.updated, *result.closed]:
+        if p.id is None:
+            p.id = conn.execute(
+                paper_positions.insert().values(account_id=account.id, **position_values(p)).returning(paper_positions.c.id)
+            ).scalar_one()
+        else:
+            conn.execute(paper_positions.update().where(paper_positions.c.id == p.id)
+                         .values(**position_values(p), updated_at=func.now()))
+
+    for plan in result.resolved_plans:
+        conn.execute(trade_plans.update().where(trade_plans.c.id == plan.id)
+                     .values(status=plan.status, executed_date=plan.executed_date, updated_at=func.now()))
+    for plan in result.new_plans:
+        plan.id = conn.execute(
+            trade_plans.insert().values(
+                account_id=account.id, plan_date=plan.plan_date, symbol=plan.symbol, action=plan.action,
+                reason=plan.reason, priority=plan.priority, close_price=plan.close_price,
+                reference_price=plan.reference_price, skip_above=plan.skip_above, trailing_line=plan.trailing_line,
+                atr_stop=plan.atr_stop, status=plan.status,
+            ).returning(trade_plans.c.id)
+        ).scalar_one()
+
+    conn.execute(paper_equity.insert().values(
+        account_id=account.id, trade_date=result.day, cash=result.cash, holdings=result.holdings,
+        equity=result.equity, positions=len(result.updated),
+    ))
 
 
 def load_level_inputs(conn: Connection, symbol: str, days: int) -> pd.DataFrame:

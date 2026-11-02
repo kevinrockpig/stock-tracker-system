@@ -7,7 +7,8 @@
    → 依指標掃描策略並同步策略訊號
 3. 全部股票完成後，依最新訊號重新計算策略回測（scraper/backtest.py）
 4. 投資組合回測：共用資金、最多同時持有 10 檔（scraper/portfolio.py）
-5. 計算下一個交易日的參考價位（scraper/levels.py）
+5. 交易計畫：觀察中策略的模擬帳戶逐日執行並產生下一個交易日的計畫（scraper/paper.py）
+6. 計算下一個交易日的參考價位（scraper/levels.py）
 """
 
 import argparse
@@ -58,6 +59,7 @@ from scraper.fetcher import (
 )
 from scraper.indicators import compute_indicators, to_indicator_records
 from scraper.levels import log_levels, market_code, run_reference_levels
+from scraper.paper import log_paper, run_paper
 from scraper.portfolio import log_portfolio, run_portfolio
 from scraper.listing import fetch_listing_dates
 from scraper.strategies import STRATEGIES, evaluate_strategies, to_signal_set
@@ -205,6 +207,11 @@ def run(force_full: bool = False) -> int:
     except Exception:
         logger.exception("投資組合回測失敗（其他結果已寫入，不受影響）")
         failed.append("投資組合回測")
+    try:
+        log_paper(run_paper(engine, WATCHLIST))
+    except Exception:
+        logger.exception("交易計畫失敗（其他結果已寫入，不受影響）")
+        failed.append("交易計畫")
     try:
         log_levels(run_reference_levels(engine, WATCHLIST))
     except Exception:
