@@ -1,7 +1,7 @@
 // 回測結果的判定文字：策略選股頁、個股頁、說明頁共用，確保說法一致
 
 // 判定「有優勢」用的是單邊檢定：95% 信賴區間的下限 > 0，即誤判機率約 2.5%
-const ONE_SIDED_ALPHA = 0.025
+export const ONE_SIDED_ALPHA = 0.025
 
 // 回測規則的數字，供說明頁顯示；必須與 Python 端 scraper/backtest.py 一致（回測在 Python 計算）
 export const BACKTEST_RULES = {

@@ -1,9 +1,10 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { fetchBacktests, fetchScreener, fetchStocks, fetchStrategies } from '../api/stocks.js'
+import { fetchBacktests, fetchGroups, fetchScreener, fetchStocks, fetchStrategies } from '../api/stocks.js'
 import BacktestResults from '../components/BacktestResults.vue'
-import { falsePassChance, groupComparisons } from '../utils/backtest.js'
+import { ONE_SIDED_ALPHA, falsePassChance } from '../utils/backtest.js'
+import { groupShortName } from '../utils/groups.js'
 import { findHashTarget } from '../utils/scroll.js'
 import { formatChange, formatPercent, formatPrice, formatRate, trendClass } from '../utils/format.js'
 
@@ -15,7 +16,7 @@ const DAY_OPTIONS = [
   { days: 20, label: '近 20 日' },
 ]
 const WIDEST_DAYS = DAY_OPTIONS.at(-1).days
-// 回測範圍：觀察名單合併（API 的 scope=ALL）或單一股票
+// 回測範圍：觀察名單合併（API 的 scope=ALL）、組別（TW50、CUSTOM）或單一股票
 const ALL_SCOPE = 'ALL'
 
 const route = useRoute()
@@ -37,12 +38,15 @@ const selectedDays = computed(() => {
 })
 const selectedStrategy = computed(() => strategies.value.find((s) => s.code === selectedCode.value))
 
-// 回測範圍的選項來自股票清單；清單無法取得時只提供合併結果
+// 回測範圍的選項來自組別與股票清單；無法取得時只提供合併結果
 const stocks = ref([])
+const groups = ref([])
 const selectedScope = computed(() => {
   const scope = route.query.scope
-  return stocks.value.some((stock) => stock.symbol === scope) ? scope : ALL_SCOPE
+  const known = groups.value.some((g) => g.code === scope) || stocks.value.some((stock) => stock.symbol === scope)
+  return known ? scope : ALL_SCOPE
 })
+const scopeIsStock = computed(() => stocks.value.some((stock) => stock.symbol === selectedScope.value))
 
 function select(changes) {
   const query = { strategy: selectedCode.value, days: selectedDays.value, scope: selectedScope.value, ...changes }
@@ -117,29 +121,55 @@ function retryBacktest() {
 const strategyResults = (data) => data?.results.filter((r) => r.strategy.code === selectedCode.value) ?? []
 const allBacktest = computed(() => backtests.value[ALL_SCOPE])
 const scopeBacktest = computed(() => backtests.value[selectedScope.value])
-const scopeResults = computed(() => strategyResults(scopeBacktest.value))
+const ruleHorizon = (data, code) => data?.exitRules.find((rule) => rule.code === code)?.horizon
 const exitRuleName = (code) => allBacktest.value?.exitRules.find((rule) => rule.code === code)?.name ?? code
 
-// 策略說明下方的一句話摘要：合併結果中哪些出場方式有優勢
-const edgeRules = computed(() => strategyResults(allBacktest.value).filter((r) => r.hasEdge).map((r) => r.exitRule))
+// 依短線 / 波段分組：每組有自己的出場方式、結果與「同時比較的組數」（波段策略只有波段組）
+function horizonSections(data) {
+  const results = strategyResults(data)
+  return (data?.horizons ?? [])
+    .map((horizon) => ({
+      ...horizon,
+      exitRules: data.exitRules.filter((rule) => rule.horizon === horizon.code),
+      results: results.filter((r) => ruleHorizon(data, r.exitRule) === horizon.code),
+    }))
+    .filter((section) => section.results.length)
+}
+const sections = computed(() => horizonSections(scopeBacktest.value))
+// 策略說明下方的一句話摘要：合併結果中，每組有哪些出場方式有優勢
+const summary = computed(() =>
+  horizonSections(allBacktest.value).map((section) => ({
+    ...section,
+    edges: section.results.filter((r) => r.hasEdge).map((r) => exitRuleName(r.exitRule)),
+  })),
+)
 
-// 從選股結果進入個股頁時，K 線圖預先標出這個策略的進出場點：優先用有優勢的出場方式，否則用第一種
-const detailExitRule = computed(() => edgeRules.value[0] ?? allBacktest.value?.exitRules[0]?.code)
+// 從選股結果進入個股頁時，K 線圖預先標出這個策略的進出場點：優先用有優勢的出場方式，否則用這個策略的第一種
+const detailExitRule = computed(() => {
+  const results = strategyResults(allBacktest.value)
+  return (results.find((r) => r.hasEdge) ?? results[0])?.exitRule
+})
 function detailLink(symbol) {
   const query = detailExitRule.value ? { strategy: selectedCode.value, exitRule: detailExitRule.value } : {}
   return { name: 'stock-detail', params: { symbol }, query }
 }
 
-const scopeName = computed(() => {
-  if (selectedScope.value === ALL_SCOPE) return stocks.value.length ? `全部 ${stocks.value.length} 檔合併` : '全部合併'
-  return stocks.value.find((stock) => stock.symbol === selectedScope.value)?.name ?? selectedScope.value
+// 看個股回測時的提醒：全部股票 × 策略 × 出場方式的比較次數，以及即使都沒有優勢、預期剛好通過的組數
+const stockComparisons = computed(() => {
+  const combos = (allBacktest.value?.horizons ?? []).reduce((sum, h) => sum + h.comparisons, 0)
+  const total = stocks.value.length * combos
+  return { total, lucky: Math.round(total * ONE_SIDED_ALPHA) }
 })
 
 onMounted(() => {
   loadStrategies()
+  // 只影響回測範圍的選項，錯誤訊息由其他查詢顯示
   fetchStocks()
     .then((list) => (stocks.value = list))
-    .catch(() => {}) // 只影響回測範圍的選項，錯誤訊息由其他查詢顯示
+    .catch(() => {})
+  fetchGroups()
+    .then((list) => (groups.value = list))
+    .catch(() => {})
 })
 // 策略清單載入後 selectedCode 才有值，此時會觸發第一次查詢；之後每次切換策略或區間都重新查詢
 watch([selectedCode, selectedDays], loadResult)
@@ -171,16 +201,19 @@ watch(selectedScope, (scope) => {
           :class="{ active: strategy.code === selectedCode }"
           @click="select({ strategy: strategy.code })"
         >
-          {{ strategy.name }}
+          {{ strategy.name }}<span v-if="strategy.swingOnly" class="swing-tag">波段</span>
         </button>
       </div>
       <p v-if="selectedStrategy" class="description">
         條件：{{ selectedStrategy.description }}
         <RouterLink :to="{ name: 'about', hash: '#strategies' }">策略說明</RouterLink>
       </p>
-      <p v-if="allBacktest && selectedStrategy" class="description">
-        歷史回測（觀察名單合併）：<strong v-if="edgeRules.length" class="edge-text">★ {{ edgeRules.map(exitRuleName).join('、') }}有優勢</strong
-        ><template v-else>各種出場方式都<strong>無明顯優勢</strong></template>
+      <p v-if="summary.length && selectedStrategy" class="description">
+        歷史回測（全部合併）：<template v-for="(section, i) in summary" :key="section.code"
+          >{{ i ? '；' : '' }}{{ section.name }}<strong v-if="section.edges.length" class="edge-text"
+            >★ {{ section.edges.join('、') }}有優勢</strong
+          ><template v-else>都<strong>無明顯優勢</strong></template></template
+        >
         <RouterLink :to="{ query: route.query, hash: '#backtest' }" class="jump">看回測結果 ↓</RouterLink>
       </p>
 
@@ -229,6 +262,7 @@ watch(selectedScope, (scope) => {
               <div class="card-head">
                 <strong>{{ match.name }}</strong>
                 <span class="symbol">{{ match.symbol }}</span>
+                <span v-for="code in match.quote?.groups ?? []" :key="code" class="group-tag">{{ groupShortName(code) }}</span>
                 <span v-if="result.days > 1 && match.lastSignalDate === result.marketDate" class="badge">
                   最新交易日符合
                 </span>
@@ -245,7 +279,7 @@ watch(selectedScope, (scope) => {
                 <dt>區間內符合</dt>
                 <dd>{{ match.signalCount }} 個交易日</dd>
                 <dt>報價日期</dt>
-                <dd>{{ match.quote?.tradeDate ?? '—' }}（日收盤價）</dd>
+                <dd>{{ match.quote?.tradeDate ?? '—' }}</dd>
               </dl>
               <span class="more">查看 K 線圖與歷史進出場點 →</span>
             </RouterLink>
@@ -261,49 +295,73 @@ watch(selectedScope, (scope) => {
     <section v-if="selectedStrategy" id="backtest" class="backtest">
       <h2>歷史回測：{{ selectedStrategy.name }}</h2>
       <p class="meta">
-        每次出現訊號，於下一個交易日開盤買進，再依 4 種方式出場；報酬已扣手續費與證交稅、含現金股利，並與「同一檔股票任意一天進場」比較。<RouterLink :to="{ name: 'about', hash: '#backtest' }">回測方法與限制</RouterLink>
+        每次出現訊號，於下一個交易日開盤買進，再依各種方式出場；報酬已扣手續費與證交稅、含現金股利，並與「同一檔股票任意一天進場」比較。<RouterLink :to="{ name: 'about', hash: '#backtest' }">回測方法與限制</RouterLink>
       </p>
 
-      <div class="filter-row" role="group" aria-label="回測範圍">
-        <button
-          type="button"
-          class="small"
-          :class="{ active: selectedScope === ALL_SCOPE }"
-          @click="select({ scope: ALL_SCOPE })"
+      <div class="scope-row">
+        <div class="filter-row" role="group" aria-label="回測範圍">
+          <button
+            type="button"
+            class="small"
+            :class="{ active: selectedScope === ALL_SCOPE }"
+            @click="select({ scope: ALL_SCOPE })"
+          >
+            全部合併
+          </button>
+          <button
+            v-for="group in groups"
+            :key="group.code"
+            type="button"
+            class="small"
+            :class="{ active: selectedScope === group.code }"
+            @click="select({ scope: group.code })"
+          >
+            {{ group.name }}
+          </button>
+        </div>
+        <select
+          v-if="stocks.length"
+          class="stock-select"
+          aria-label="個股回測"
+          :value="scopeIsStock ? selectedScope : ''"
+          @change="select({ scope: $event.target.value || ALL_SCOPE })"
         >
-          全部合併
-        </button>
-        <button
-          v-for="stock in stocks"
-          :key="stock.symbol"
-          type="button"
-          class="small"
-          :class="{ active: selectedScope === stock.symbol }"
-          @click="select({ scope: stock.symbol })"
-        >
-          {{ stock.name }}
-        </button>
+          <option value="">個股…</option>
+          <option v-for="stock in stocks" :key="stock.symbol" :value="stock.symbol">
+            {{ stock.symbol.split('.')[0] }} {{ stock.name }}
+          </option>
+        </select>
       </div>
 
       <template v-if="scopeBacktest">
         <p class="meta">
-          {{ scopeName }} · 回測期間 {{ scopeBacktest.periodStart }} ~ {{ scopeBacktest.periodEnd }}（前後段以
-          {{ scopeBacktest.splitDate }} 切分）<template v-if="scopeResults.length">
-            · 同期買進持有 {{ formatRate(scopeResults[0].buyHoldReturn, { digits: 1 }) }}{{ selectedScope === ALL_SCOPE ? '（各檔平均）' : '' }}</template
-          >
+          {{ scopeBacktest.scopeName }}<template v-if="!scopeIsStock">（{{ scopeBacktest.scopeStocks }} 檔，各檔等額資金）</template>
+          · 回測期間 {{ scopeBacktest.periodStart }} ~ {{ scopeBacktest.periodEnd }}（前後段以 {{ scopeBacktest.splitDate }} 切分）
         </p>
-        <BacktestResults
-          v-if="scopeResults.length"
-          :results="scopeResults"
-          :exit-rules="scopeBacktest.exitRules"
-          :symbol="selectedScope === ALL_SCOPE ? null : selectedScope"
-        />
-        <p v-else class="status">這個範圍還沒有「{{ selectedStrategy.name }}」的回測結果。</p>
-        <p v-if="selectedScope === ALL_SCOPE && stocks.length" class="meta">選擇個股，可在 K 線圖查看每筆交易的進出場點。</p>
-        <p class="caution">
-          同時比較了 {{ groupComparisons(scopeBacktest) }} 組（策略 × 出場方式）。即使全都沒有真正的優勢，也可能有組別剛好通過（機率最多約
-          {{ falsePassChance(groupComparisons(scopeBacktest)) }}%）；「有優勢」代表值得繼續觀察，不是保證。過去的績效不代表未來。
+        <p v-if="scopeIsStock" class="caution">
+          個股的交易筆數少，而且這只是 {{ stocks.length }} 檔 × {{ stockComparisons.total / stocks.length }} 組、共約
+          {{ stockComparisons.total.toLocaleString() }} 次比較中的一組：即使全都沒有真正的優勢，也預期約有 {{ stockComparisons.lucky }}
+          組剛好通過。個股的「有優勢」很容易是巧合，請以全部合併或組別的結果為主。
         </p>
+        <p v-else-if="selectedScope !== ALL_SCOPE" class="meta">
+          可比較「0050 成分股」與「自選」的結果：如果只在其中一組有效，多半是選股造成的，而不是策略本身有效。
+        </p>
+
+        <section v-for="section in sections" :key="section.code" class="horizon">
+          <h3>{{ section.name }}<span class="meta">{{ section.code === 'swing' ? '持有數週到數月；看資金曲線與買進持有的比較' : '持有數日到數週' }}</span></h3>
+          <BacktestResults
+            :results="section.results"
+            :exit-rules="section.exitRules"
+            :symbol="scopeIsStock ? selectedScope : null"
+            :show-equity="section.code === 'swing'"
+          />
+          <p v-if="!scopeIsStock" class="caution">
+            {{ section.name }}組同時比較了 {{ section.comparisons }} 組（策略 × 出場方式）。即使全都沒有真正的優勢，也可能有組別剛好通過（機率最多約
+            {{ falsePassChance(section.comparisons) }}%）；「有優勢」代表值得繼續觀察，不是保證。過去的績效不代表未來。
+          </p>
+        </section>
+        <p v-if="!sections.length" class="status">這個範圍還沒有「{{ selectedStrategy.name }}」的回測結果。</p>
+        <p v-if="!scopeIsStock && stocks.length" class="meta">選擇個股，可在 K 線圖查看每筆交易的進出場點。</p>
       </template>
       <p v-else-if="backtestLoading" class="status">回測結果載入中…</p>
       <div v-else-if="backtestError" class="status error">
@@ -423,6 +481,48 @@ dd {
 .more {
   color: #0b57d0;
   font-size: 13px;
+}
+
+.swing-tag,
+.group-tag {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: #e7f0ff;
+  color: #0b57d0;
+  font-size: 11px;
+}
+
+.group-tag {
+  background: #f1f3f5;
+  color: #666;
+}
+
+.filter-row button.active .swing-tag {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+}
+
+.scope-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0 12px;
+}
+
+.stock-select {
+  padding: 3px 6px;
+  font-size: 13px;
+}
+
+.horizon h3 {
+  margin: 16px 0 8px;
+  font-size: 16px;
+}
+
+.horizon h3 .meta {
+  margin-left: 8px;
+  font-weight: normal;
 }
 
 .edge-text {

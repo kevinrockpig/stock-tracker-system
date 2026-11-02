@@ -32,6 +32,8 @@ onMounted(async () => {
   }
 })
 
+const horizonName = (code) => backtest.value?.horizons.find((h) => h.code === code)?.name ?? code
+
 // 出場規則、回測期間與比較組數取自回測 API；無法連線時只少這些數字，說明照常顯示
 const backtest = ref(null)
 onMounted(async () => {
@@ -129,7 +131,12 @@ onBeforeUnmount(() => {
             <strong>價格未還原除權息</strong>：與券商報價一致，除權息日的 K 線會出現跳空缺口，技術指標也會受影響；股票分割則已調整，分割前後的價格可直接比較（例如 0050 於 2025 年 6 月分割）。
           </li>
           <li><strong>成交量單位為「張」</strong>：1 張 = 1,000 股。</li>
-          <li><strong>追蹤範圍</strong>：只包含觀察名單中的股票，見「股票清單」頁。</li>
+          <li>
+            <strong>追蹤範圍</strong>：觀察名單中的股票，分為「0050 成分股」（元大台灣50 公布的持股，2026-10-30；0050 每季調整成分股，名單需手動更新）與「自選」兩組，同一檔可同時屬於兩組，見「股票清單」頁。
+          </li>
+          <li>
+            <strong>從上市（上櫃）日起</strong>：資料來源可能包含上市前的興櫃交易（沒有漲跌幅限制），系統依證交所、櫃買中心公布的上市日期，只保留上市日起的資料，例如力積電自 2021-12-06 起。
+          </li>
         </ul>
 
         <h2 id="indicators">技術指標</h2>
@@ -184,12 +191,14 @@ onBeforeUnmount(() => {
             <thead>
               <tr>
                 <th>策略</th>
+                <th>類型</th>
                 <th>條件</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="strategy in strategies" :key="strategy.code">
                 <th scope="row">{{ strategy.name }}</th>
+                <td data-label="類型">{{ strategy.swingOnly ? '波段' : '短線與波段' }}</td>
                 <td data-label="條件">{{ strategy.description }}</td>
               </tr>
             </tbody>
@@ -200,7 +209,8 @@ onBeforeUnmount(() => {
         <ul class="small">
           <li>條件中的「前一日」指前一個交易日。</li>
           <li>「策略選股」頁的「近 N 日」為最近 N 個交易日，期間內任何一天符合就會列出，並顯示最後一次符合的日期。</li>
-          <li>「黃金交叉」與「突破均線」只在發生的當天成立，隔天不會重複計算；「多頭排列」則是每天都符合就每天成立。</li>
+          <li>「黃金交叉」「突破均線」「月線穿越季線」只在發生的當天成立，隔天不會重複計算；「多頭排列」每天都符合就每天成立；「創 120 日新高」每次創新高都成立。</li>
+          <li>「類型」為回測時搭配的出場方式：「波段」策略只搭配波段的出場方式（見下方回測方法）。</li>
         </ul>
 
         <h2 id="backtest">回測方法與限制</h2>
@@ -225,19 +235,24 @@ onBeforeUnmount(() => {
             <thead>
               <tr>
                 <th>出場方式</th>
+                <th>分組</th>
                 <th>規則</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="rule in backtest.exitRules" :key="rule.code">
                 <th scope="row">{{ rule.name }}</th>
+                <td data-label="分組">{{ horizonName(rule.horizon) }}</td>
                 <td data-label="規則">{{ rule.description }}</td>
               </tr>
             </tbody>
           </table>
         </div>
         <p v-else class="status">無法取得出場規則（回測 API 未連線）。</p>
-        <p class="small">ATR(14) 是最近 14 個交易日的平均真實波動幅度；股價波動越大，移動停利線離最高價越遠。</p>
+        <ul class="small">
+          <li>ATR(14) 是最近 14 個交易日的平均真實波動幅度；股價波動越大，移動停利線離最高價越遠。</li>
+          <li>出場方式分成「短線」與「波段」兩組，各自統計與比較；波段策略只搭配波段組。</li>
+        </ul>
 
         <h3>成本與股利</h3>
         <ul>
@@ -247,7 +262,16 @@ onBeforeUnmount(() => {
             {{ roundTripCost }}。
           </li>
           <li>持有期間遇到除息（進場日之後、出場日當天以前），現金股利計入報酬。</li>
-          <li>報酬是<strong>每一筆交易</strong>的報酬率，不是年化報酬，也不是整體資金的成長。</li>
+          <li>報酬是<strong>每一筆交易</strong>的報酬率，不是年化報酬，也不是整體資金的成長；整體資金的表現另見下方「資金曲線」。</li>
+        </ul>
+
+        <h3>資金曲線（波段評估）</h3>
+        <ul>
+          <li>每檔股票以 1 元起算，照策略進出場：持有期間依收盤價計值，空手時資金不變。多檔合併時，每檔分配等額資金（之後不再平衡）。</li>
+          <li>
+            由此算出<strong>年化報酬</strong>、<strong>最大回撤</strong>（資金從高點下跌的最大幅度）與<strong>在場時間</strong>（持有部位的交易日比例），並與同期間<strong>買進持有</strong>比較。
+          </li>
+          <li>波段策略常常空手，在大多頭期間年化報酬幾乎一定輸給買進持有；它的價值主要在降低回撤，因此兩者要一起看。</li>
         </ul>
 
         <h3>如何判斷有沒有優勢</h3>
@@ -255,26 +279,39 @@ onBeforeUnmount(() => {
           <li>
             <strong>基準</strong>：同一檔股票「任何一個交易日都照同樣規則進出場」的平均報酬。股票長期上漲時，隨便哪天買都可能賺錢，策略要贏過這個基準，訊號才有意義。
           </li>
-          <li><strong>超額報酬</strong> = 每筆交易報酬 − 同一檔股票的基準，並附 95% 信賴區間（交易越多、報酬越穩定，區間越窄）。</li>
+          <li>
+            <strong>跌破季線出場</strong>的基準再依「訊號當天收盤是否在季線之上」分開比較：當天已在季線之下的任意日進場，隔天就會被迫出場、白付一次成本，會把基準拉低，讓「出現時都在季線之上」的訊號看起來有優勢。
+          </li>
+          <li>
+            <strong>超額報酬</strong> = 每筆交易報酬 − 同一檔股票的基準，並附 95% 信賴區間。同一個月進場的交易（不論哪一檔）常一起漲跌，不能當成互相獨立的樣本，因此區間<strong>依進場月份分群</strong>計算；股票越多、彼此越連動，區間就比單純計算寬。
+          </li>
           <li>
             <strong>穩健性</strong>：回測期間從中間的交易日<template v-if="backtest">（{{ backtest.splitDate }}）</template>切成前後兩段，各段和同一段期間的基準比較，避免只靠某一段行情。
           </li>
           <li>
             標示「<strong>歷史上有優勢</strong>」需同時符合：超額報酬的區間下限大於 0，而且前後兩段的超額報酬都大於 0。其他情況標示「歷史上無明顯優勢」。
           </li>
-          <li>勝率的區間以 Wilson 方法計算；單一股票的交易次數較少，區間較寬，判斷以全部合併的結果為主。</li>
+          <li>勝率的區間以 Wilson 方法計算。</li>
+          <li>
+            <strong>範圍</strong>：可看全部合併、組別（0050 成分股、自選）或單一股票。比較兩個組別：如果策略只在其中一組有效，多半是選股造成的，而不是策略本身有效。
+          </li>
         </ul>
 
         <h3>限制</h3>
         <ul>
           <li>假設都能以開盤價或收盤價成交；實際交易會有滑價、買不到或賣不掉的情況。</li>
-          <li>觀察名單是現在挑選的股票（倖存者偏差）：過去表現好的股票，回測結果自然比較好看。</li>
-          <li>股價與除權息資料來自 Yahoo Finance，偶有缺漏；減資退還的現金（例如鴻海 2018 年減資）沒有計入。</li>
           <li>
-            同時比較了{{ backtest ? ` ${groupComparisons(backtest)} 組` : '多組' }}（策略 × 出場方式）。即使全都沒有真正的優勢，也可能有組別剛好通過<template
+            觀察名單是「現在」的 0050 成分股與自選的題材股（倖存者偏差）：過去十年表現好的公司才會留在名單中，回測結果會偏樂觀，特別是趨勢、波段策略。
+          </li>
+          <li>股價與除權息資料來自 Yahoo Finance，偶有缺漏或錯誤；減資退還的現金（例如鴻海 2018 年、長榮 2022 年）沒有計入。</li>
+          <li>
+            短線、波段各同時比較了{{ backtest ? ` ${groupComparisons(backtest)} 組` : '多組' }}（策略 × 出場方式）。即使全都沒有真正的優勢，也可能有組別剛好通過<template
               v-if="backtest"
-              >（機率最多約 {{ falsePassChance(groupComparisons(backtest)) }}%）</template
+              >（每組機率最多約 {{ falsePassChance(groupComparisons(backtest)) }}%）</template
             >，所以「有優勢」代表值得繼續觀察，不是保證。
+          </li>
+          <li>
+            <strong>單一股票的結果更容易是巧合</strong>：每檔都比較所有策略與出場方式，數十檔加起來是上千次比較，即使全都沒有優勢，也一定會有幾組剛好通過；而且單一股票的交易筆數少。請以全部合併或組別的結果為主。
           </li>
           <li>規則與參數事先固定，沒有為了讓結果好看而反覆調整；即便如此，過去的結果也不代表未來。</li>
         </ul>

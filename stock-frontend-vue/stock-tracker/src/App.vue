@@ -1,11 +1,15 @@
 <script setup>
+import { useRoute } from 'vue-router'
 import BackToTop from './components/BackToTop.vue'
+
+// 個股頁屬於「股票清單」底下，導覽列也標示為目前位置
+const route = useRoute()
 </script>
 
 <template>
   <main class="container">
     <nav class="site-nav" aria-label="主選單">
-      <RouterLink to="/">股票清單</RouterLink>
+      <RouterLink to="/" :class="{ 'router-link-active': route.name === 'stock-detail' }">股票清單</RouterLink>
       <RouterLink :to="{ name: 'screener' }">策略選股</RouterLink>
       <RouterLink :to="{ name: 'about' }">使用說明</RouterLink>
     </nav>

@@ -10,6 +10,8 @@ const props = defineProps({
   exitRules: { type: Array, required: true },
   // 單一股票的統計時提供代號，卡片附上「在 K 線圖查看」的連結；合併統計時為 null
   symbol: { type: String, default: null },
+  // 波段組：資金曲線（年化、最大回撤、在場時間）與買進持有的比較放在卡片上；短線組放在「更多統計」
+  showEquity: { type: Boolean, default: false },
 })
 
 const cards = computed(() =>
@@ -40,6 +42,33 @@ const plain = (value) => formatRate(value, { digits: 1, signed: false })
         <span class="ci">95% 區間 {{ rate(result.excessLow) }} ~ {{ rate(result.excessHigh) }}</span>
       </div>
       <p class="reason">{{ v.reason }}</p>
+
+      <table v-if="showEquity && result.cagr != null" class="equity">
+        <thead>
+          <tr>
+            <th>資金曲線</th>
+            <th class="num">策略</th>
+            <th class="num">買進持有</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">年化報酬</th>
+            <td class="num" :class="trendClass(result.cagr)">{{ formatRate(result.cagr, { digits: 1 }) }}</td>
+            <td class="num">{{ formatRate(result.bhCagr, { digits: 1 }) }}</td>
+          </tr>
+          <tr>
+            <th scope="row">最大回撤</th>
+            <td class="num">{{ formatRate(result.maxDrawdown, { digits: 1 }) }}</td>
+            <td class="num">{{ formatRate(result.bhMaxDrawdown, { digits: 1 }) }}</td>
+          </tr>
+          <tr>
+            <th scope="row">在場時間</th>
+            <td class="num">{{ formatRate(result.exposure, { digits: 0, signed: false }) }}</td>
+            <td class="num">100%</td>
+          </tr>
+        </tbody>
+      </table>
 
       <dl>
         <dt>交易次數</dt>
@@ -80,6 +109,16 @@ const plain = (value) => formatRate(value, { digits: 1, signed: false })
           <dd>{{ result.maxConsecutiveLosses }} 筆</dd>
           <dt>平均持有</dt>
           <dd>{{ formatNumber(result.avgHoldingDays, 1) }} 個交易日</dd>
+          <template v-if="!showEquity && result.cagr != null">
+            <dt>資金曲線年化</dt>
+            <dd>{{ formatRate(result.cagr, { digits: 1 }) }}<span class="vs">買進持有 {{ formatRate(result.bhCagr, { digits: 1 }) }}</span></dd>
+            <dt>最大回撤</dt>
+            <dd>{{ formatRate(result.maxDrawdown, { digits: 1 }) }}<span class="vs">買進持有 {{ formatRate(result.bhMaxDrawdown, { digits: 1 }) }}</span></dd>
+            <dt>在場時間</dt>
+            <dd>{{ formatRate(result.exposure, { digits: 0, signed: false }) }}</dd>
+          </template>
+          <dt>區間計算月份</dt>
+          <dd>{{ result.excessClusters ?? '—' }} 個月（同一個月進場的交易視為同一群）</dd>
         </dl>
       </details>
 
@@ -195,6 +234,29 @@ dd {
 
 details {
   margin-bottom: 4px;
+}
+
+.equity {
+  width: 100%;
+  margin: 8px 0;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.equity th,
+.equity td {
+  padding: 3px 6px;
+  border-bottom: 1px solid #f1f3f5;
+  text-align: left;
+  font-weight: normal;
+}
+
+.equity thead th {
+  color: #666;
+}
+
+.equity .num {
+  text-align: right;
 }
 
 summary {

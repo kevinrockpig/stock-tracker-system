@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { fetchBacktests, fetchHistory, fetchLevels, fetchTrades } from '../api/stocks.js'
+import { fetchBacktests, fetchHistory, fetchLevels, fetchStocks, fetchTrades } from '../api/stocks.js'
 import CandlestickChart from '../components/CandlestickChart.vue'
 import { BACKTEST_RULES, EXIT_REASONS, verdict } from '../utils/backtest.js'
 import { CHART_RANGES, LEVEL_COLORS, MA_LINES, SUB_CHARTS, TRADE_COLORS, TRAILING_LINE_COLOR } from '../utils/chartConfig.js'
@@ -16,6 +16,7 @@ import {
   monthsBefore,
   trendClass,
 } from '../utils/format.js'
+import { groupShortName } from '../utils/groups.js'
 import { levelLines, levelRows } from '../utils/levels.js'
 
 const props = defineProps({
@@ -69,6 +70,23 @@ async function load() {
 
 watch(() => props.symbol, load, { immediate: true })
 
+// 所屬組別與上市日期（取自股票清單，只用於標題列；取不到時不顯示）
+const stockInfo = ref(null)
+watch(
+  () => props.symbol,
+  async (symbol) => {
+    stockInfo.value = null
+    try {
+      stockInfo.value = (await fetchStocks()).find((stock) => stock.symbol === symbol) ?? null
+    } catch {
+      // 標題列少了組別而已
+    }
+  },
+  { immediate: true },
+)
+// 回測期間從 2015 年起；之後才上市的股票提醒資料較短
+const listedLate = computed(() => stockInfo.value?.listedDate && stockInfo.value.listedDate > '2015-06-01')
+
 // 參考價位：最新收盤後計算、供下一個交易日參考（不是漲跌預測）
 const levels = ref(null)
 const levelsError = ref('')
@@ -88,6 +106,20 @@ const levelTable = computed(() => (levels.value ? levelRows(levels.value) : []))
 const chartLevelLines = computed(() => (levels.value && showLevels.value ? levelLines(levels.value) : []))
 // 參考價位比 K 線舊：今天的更新程式還沒跑完，或參考價位的計算失敗
 const levelsStale = computed(() => levels.value && latest.value && levels.value.basisDate !== latest.value.tradeDate)
+
+// 返回連結：從股票清單或策略選股頁進來時，回到原頁（保留篩選條件與捲動位置）；直接開啟網址時回到股票清單
+const backFrom = computed(() => {
+  const back = typeof window !== 'undefined' ? window.history.state?.back : null
+  if (typeof back !== 'string') return null
+  if (back.startsWith('/screener')) return { path: back, label: '返回策略選股' }
+  if (back === '/' || back.startsWith('/?')) return { path: back, label: '返回股票清單' }
+  return null
+})
+function goBack(event) {
+  if (!backFrom.value) return
+  event.preventDefault()
+  router.back()
+}
 
 // 回測進出場點：選擇記錄在網址（?strategy=&exitRule=），策略選股頁可直接連過來，也可分享
 // 預設不顯示；不是圖表外觀設定，所以不存進瀏覽器
@@ -113,15 +145,35 @@ const strategyOptions = computed(() => {
   for (const result of backtest.value?.results ?? []) seen.set(result.strategy.code, result.strategy)
   return [...seen.values()]
 })
-const exitRuleOptions = computed(() => backtest.value?.exitRules ?? [])
 const selectedStrategy = computed(() => strategyOptions.value.find((s) => s.code === route.query.strategy))
+
+// 這個策略有回測結果的出場方式（波段策略只有波段出場），依短線 / 波段分組
+function rulesFor(strategyCode) {
+  const available = new Set(
+    (backtest.value?.results ?? []).filter((r) => r.strategy.code === strategyCode).map((r) => r.exitRule),
+  )
+  return (backtest.value?.exitRules ?? []).filter((rule) => !strategyCode || available.has(rule.code))
+}
+const exitRuleOptions = computed(() => rulesFor(selectedStrategy.value?.code))
+const exitRuleGroups = computed(() =>
+  (backtest.value?.horizons ?? [])
+    .map((horizon) => ({ ...horizon, rules: exitRuleOptions.value.filter((rule) => rule.horizon === horizon.code) }))
+    .filter((group) => group.rules.length),
+)
 const selectedExitRule = computed(
   () => exitRuleOptions.value.find((rule) => rule.code === route.query.exitRule) ?? exitRuleOptions.value[0],
 )
 
 function selectBacktest(changes) {
   const query = { strategy: selectedStrategy.value?.code, exitRule: selectedExitRule.value?.code, ...changes }
-  router.replace({ query: query.strategy ? query : {} })
+  if (!query.strategy) {
+    router.replace({ query: {} })
+    return
+  }
+  // 換成波段策略時，原本的短線出場方式不適用：改為該策略的第一種出場方式
+  const rules = rulesFor(query.strategy)
+  if (!rules.some((rule) => rule.code === query.exitRule)) query.exitRule = rules[0]?.code
+  router.replace({ query })
 }
 
 // 目前選擇在這檔股票的回測統計與判定
@@ -173,7 +225,7 @@ const changePercent = computed(() => {
 
 <template>
   <section>
-    <RouterLink to="/" class="back">← 返回股票清單</RouterLink>
+    <RouterLink :to="backFrom?.path ?? '/'" class="back" @click="goBack">← {{ backFrom?.label ?? '返回股票清單' }}</RouterLink>
 
     <p v-if="loading" class="status">載入中…（資料庫閒置後首次連線可能需要數秒）</p>
 
@@ -184,7 +236,11 @@ const changePercent = computed(() => {
 
     <template v-else-if="history">
       <header class="quote">
-        <h1>{{ history.name }} <span class="symbol">{{ history.symbol }}</span></h1>
+        <h1>
+          {{ history.name }} <span class="symbol">{{ history.symbol }}</span>
+          <span v-for="code in stockInfo?.groups ?? []" :key="code" class="tag">{{ groupShortName(code) }}</span>
+        </h1>
+        <p v-if="listedLate" class="meta listed">{{ stockInfo.listedDate }} 上市（櫃），資料與回測自上市日起，期間較短。</p>
         <div v-if="latest" class="price-line">
           <span class="price">{{ formatPrice(latest.closePrice) }}</span>
           <span :class="trendClass(change)">{{ formatChange(change) }}（{{ formatPercent(changePercent) }}）</span>
@@ -258,7 +314,9 @@ const changePercent = computed(() => {
               :disabled="!selectedStrategy"
               @change="selectBacktest({ exitRule: $event.target.value })"
             >
-              <option v-for="rule in exitRuleOptions" :key="rule.code" :value="rule.code">{{ rule.name }}</option>
+              <optgroup v-for="group in exitRuleGroups" :key="group.code" :label="group.name">
+                <option v-for="rule in group.rules" :key="rule.code" :value="rule.code">{{ rule.name }}</option>
+              </optgroup>
             </select>
           </fieldset>
         </div>
@@ -332,6 +390,12 @@ const changePercent = computed(() => {
             <span :class="trendClass(selectedStats.avgReturn)">{{ formatRate(selectedStats.avgReturn) }}</span>，每筆超額報酬
             <span :class="trendClass(selectedStats.excessReturn)">{{ formatRate(selectedStats.excessReturn) }}</span>（95% 區間
             {{ formatRate(selectedStats.excessLow) }} ~ {{ formatRate(selectedStats.excessHigh) }}）。{{ selectedVerdict.reason }}
+            <template v-if="selectedExitRule.horizon === 'swing' && selectedStats.cagr != null">
+              資金曲線：年化 {{ formatRate(selectedStats.cagr, { digits: 1 }) }}（買進持有 {{ formatRate(selectedStats.bhCagr, { digits: 1 }) }}）、最大回撤
+              {{ formatRate(selectedStats.maxDrawdown, { digits: 1 }) }}（買進持有 {{ formatRate(selectedStats.bhMaxDrawdown, { digits: 1 }) }}）、在場時間
+              {{ formatRate(selectedStats.exposure, { digits: 0, signed: false }) }}。
+            </template>
+            <span class="caveat">單一股票的樣本少，又是全部股票 × 策略 × 出場方式中的一組，結果很容易是巧合，請以策略選股頁的合併結果為主。</span>
           </p>
           <p class="meta">
             {{ selectedExitRule.description }}。圖中
@@ -507,6 +571,28 @@ const changePercent = computed(() => {
 select {
   padding: 3px 6px;
   font-size: 14px;
+}
+
+.tag {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #f1f3f5;
+  color: #666;
+  font-size: 12px;
+  font-weight: normal;
+  vertical-align: middle;
+}
+
+.listed {
+  margin: 0 0 6px;
+}
+
+.caveat {
+  display: block;
+  margin-top: 4px;
+  color: #666;
+  font-size: 13px;
 }
 
 .backtest h2,

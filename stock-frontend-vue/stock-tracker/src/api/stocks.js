@@ -47,6 +47,11 @@ export function fetchStocks() {
   return getJson('/api/stocks')
 }
 
+// 觀察名單的組別：[{ code, name, stocks }]；code 也可作為回測的 scope
+export function fetchGroups() {
+  return getJson('/api/groups')
+}
+
 // 歷史日 K；from / to 為 YYYY-MM-DD，可省略
 export function fetchHistory(symbol, { from, to } = {}) {
   const params = new URLSearchParams()
@@ -67,7 +72,7 @@ export function fetchScreener(strategy, days) {
   return getJson(`/api/screener?${params}`)
 }
 
-// 策略回測統計：scope 為 ALL（觀察名單合併）或股票代號
+// 策略回測統計：scope 為 ALL（觀察名單合併）、組別代碼（TW50、CUSTOM）或股票代號
 export function fetchBacktests(scope = 'ALL') {
   return getJson(`/api/backtests?${new URLSearchParams({ scope })}`)
 }
