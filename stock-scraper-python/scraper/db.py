@@ -8,6 +8,7 @@
   strategy_signals  策略訊號，只存「某股票某交易日符合某策略」的組合
   backtest_trades   策略回測的每筆交易（見 backtest.py）
   backtest_stats    策略回測統計：每個（策略, 股票或全部, 出場規則）一筆
+  portfolio_stats   投資組合回測統計：每個（策略, 範圍, 出場規則）一筆（見 portfolio.py）
   reference_levels  參考價位：每檔股票每個交易日收盤後計算一筆（見 levels.py），保留歷史供日後檢視
   official_daily_quotes       證交所 / 櫃買中心開放資料的原始日成交資訊（每日累積，與上面幾張表獨立）
   official_corporate_actions  證交所 / 櫃買中心的除權除息預告（每日累積）
@@ -207,6 +208,33 @@ backtest_stats = Table(
     ),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     UniqueConstraint("strategy", "scope", "exit_rule", name="uq_backtest_stats_key"),
+)
+
+
+# 投資組合回測：共用資金、最多同時持有 slots 檔（見 portfolio.py）。比率皆為小數
+PORTFOLIO_VALUE_COLUMNS = (
+    "slots", "seeds", "period_start", "period_end", "split_date", "trades", "skipped", "avg_invested",
+    "cagr", "max_drawdown", "calmar", "sharpe", "cagr_min", "cagr_max", "calmar_first", "calmar_second",
+    "bh_cagr", "bh_max_drawdown", "bh_calmar", "bh_sharpe", "bh_calmar_first", "bh_calmar_second",
+    "etf_cagr", "etf_max_drawdown", "etf_calmar", "beats_bh",
+)
+_PORTFOLIO_INTEGERS = {"slots", "seeds", "trades", "skipped"}
+portfolio_stats = Table(
+    "portfolio_stats",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("strategy", String(30), nullable=False),
+    Column("scope", String(20), nullable=False),
+    Column("exit_rule", String(20), nullable=False),
+    *(
+        Column(name, Date) if name.startswith("period_") or name.endswith("_date")
+        else Column(name, Boolean) if name == "beats_bh"
+        else Column(name, Integer) if name in _PORTFOLIO_INTEGERS
+        else Column(name, Numeric(12, 6))
+        for name in PORTFOLIO_VALUE_COLUMNS
+    ),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("strategy", "scope", "exit_rule", name="uq_portfolio_stats_key"),
 )
 
 
@@ -574,6 +602,35 @@ def sync_backtest_stats(conn: Connection, rows: list[dict]) -> dict[str, int]:
     stale = [row.id for row in existing if (row.strategy, row.scope, row.exit_rule) not in keep]
     if stale:
         conn.execute(backtest_stats.delete().where(backtest_stats.c.id.in_(stale)))
+    return {**counts, "deleted": len(stale)}
+
+
+def load_split_date(conn: Connection):
+    """個別交易回測使用的前後段切分日（全部合併的統計），投資組合回測沿用同一天。"""
+    return conn.execute(
+        select(backtest_stats.c.split_date).where(backtest_stats.c.scope == "ALL").limit(1)
+    ).scalar()
+
+
+def sync_portfolio_stats(conn: Connection, rows: list[dict]) -> dict[str, int]:
+    """寫入投資組合回測統計，並刪除不再出現的組合。比率四捨五入到小數 6 位。"""
+    records = []
+    for row in rows:
+        record = {"strategy": row["strategy"], "scope": row["scope"], "exit_rule": row["exit_rule"]}
+        for name in PORTFOLIO_VALUE_COLUMNS:
+            value = row.get(name)
+            if isinstance(value, float):
+                value = None if value != value else round(value, 6)  # NaN → NULL
+            record[name] = value
+        records.append(record)
+    counts = _upsert(conn, portfolio_stats, records, "uq_portfolio_stats_key", PORTFOLIO_VALUE_COLUMNS)
+    keep = {(r["strategy"], r["scope"], r["exit_rule"]) for r in records}
+    existing = conn.execute(
+        select(portfolio_stats.c.id, portfolio_stats.c.strategy, portfolio_stats.c.scope, portfolio_stats.c.exit_rule)
+    ).all()
+    stale = [row.id for row in existing if (row.strategy, row.scope, row.exit_rule) not in keep]
+    if stale:
+        conn.execute(portfolio_stats.delete().where(portfolio_stats.c.id.in_(stale)))
     return {**counts, "deleted": len(stale)}
 
 
