@@ -8,6 +8,7 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface StockPriceRepository extends JpaRepository<StockPrice, Long> {
@@ -25,6 +26,9 @@ public interface StockPriceRepository extends JpaRepository<StockPrice, Long> {
             WHERE s.group_codes IS NOT NULL
             """, nativeQuery = true)
     List<StockPrice> findLatestTwoForWatchlist();
+
+    // 某日（含）以前最近一個交易日的行情（停牌時沿用前一天）
+    Optional<StockPrice> findFirstBySymbolAndTradeDateLessThanEqualOrderByTradeDateDesc(String symbol, LocalDate date);
 
     // 日期區間內的歷史行情（含頭尾），依日期由舊到新，供 K 線圖使用
     List<StockPrice> findBySymbolAndTradeDateBetweenOrderByTradeDateAsc(String symbol, LocalDate from, LocalDate to);

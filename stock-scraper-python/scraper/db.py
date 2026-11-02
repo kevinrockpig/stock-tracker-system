@@ -286,6 +286,9 @@ paper_equity = Table(
     Column("holdings", _MONEY, nullable=False),
     Column("equity", _MONEY, nullable=False),
     Column("positions", Integer, nullable=False),
+    # 比較基準（啟用日 = 1，含股利）：同一批股票自啟用日收盤等額買進持有；0050 ETF 買進持有（參考）
+    Column("benchmark", _MONEY),
+    Column("etf", _MONEY),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     UniqueConstraint("account_id", "trade_date", name="uq_paper_equity_account_date"),
 )
@@ -784,7 +787,7 @@ def save_paper_day(conn: Connection, account, result) -> None:
 
     conn.execute(paper_equity.insert().values(
         account_id=account.id, trade_date=result.day, cash=result.cash, holdings=result.holdings,
-        equity=result.equity, positions=len(result.updated),
+        equity=result.equity, positions=len(result.updated), benchmark=result.benchmark, etf=result.etf,
     ))
 
 

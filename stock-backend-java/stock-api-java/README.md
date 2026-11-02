@@ -46,6 +46,7 @@ export DB_URL='jdbc:postgresql://<host>:5432/<db>?sslmode=require' DB_USERNAME='
 | `GET /api/screener?strategy=&days=` | 最近 `days` 個交易日（1～60，預設 1）內符合策略的股票 |
 | `GET /api/backtests?scope=` | 策略回測統計（每個策略 × 出場規則一筆）：勝率與信賴區間、平均報酬、相對任意日進場的超額報酬與區間（依進場月份分群）、前後兩段、是否有優勢、資金曲線（年化、最大回撤、在場時間）與買進持有；出場規則分短線 / 波段兩組（`horizons` 含各組比較組數）；`scope` 為 `ALL`（預設）、組別代碼或股票代號 |
 | `GET /api/portfolio-backtests?scope=` | 投資組合回測（一筆共用資金、最多同時持有 10 檔）：年化、最大回撤、Calmar（整段與前後兩段）、Sharpe、平均持股比例、各亂數種子的年化範圍；基準為同一批股票等額買進持有，另附 0050 ETF 參考。每組附標準 1（`signalEdge`，個別回測的訊號優勢）、標準 2（`beatsBenchmark`，Calmar 整段與前後段都勝過基準）與 `effective`（兩者皆通過）；`scope` 為 `ALL`（預設）或組別代碼，不提供單一股票 |
+| `GET /api/paper` | 交易計畫與往後實測：每個觀察中策略的模擬帳戶，包含待執行的計畫（買進候選與放棄價、ATR 停損，賣出與停利線）、當天執行結果、持有中部位（目前價、報酬、市值占比、目前出場線）、已出場交易、每日資金與同期買進持有 / 0050 基準 |
 | `GET /api/stocks/{symbol}/trades?strategy=&exitRule=` | 某檔股票的歷史回測交易（進出場日期、價格、股利、報酬）；`exitRule` 短線為 `hold_5`、`hold_10`、`hold_20`、`trailing_atr`，波段為 `ma60_exit`、`trailing_nocap`；波段策略只搭配波段出場（其他組合回 400） |
 
 ```bash
@@ -57,6 +58,7 @@ curl "http://localhost:8081/api/backtests"
 curl "http://localhost:8081/api/backtests?scope=TW50"
 curl http://localhost:8081/api/groups
 curl "http://localhost:8081/api/portfolio-backtests?scope=TW50"
+curl http://localhost:8081/api/paper
 curl "http://localhost:8081/api/stocks/2330.TW/trades?strategy=golden_cross&exitRule=trailing_atr"
 ```
 
@@ -71,8 +73,8 @@ src/main/java/com/ugi/stock/
 ├── controller/   StockController（/api/stocks）、StrategyController（/api/strategies、/api/screener）、
 │                 BacktestController（/api/backtests、/api/stocks/{symbol}/trades）、
 │                 ReferenceLevelController（/api/stocks/{symbol}/levels）、StockGroupController（/api/groups）、
-│                 PortfolioController（/api/portfolio-backtests）
-├── service/      StockService、StrategyService、BacktestService、PortfolioService、ReferenceLevelService、
+│                 PortfolioController（/api/portfolio-backtests）、PaperController（/api/paper）
+├── service/      StockService、StrategyService、BacktestService、PortfolioService、PaperService、ReferenceLevelService、
 │                 Strategy / ExitRule / Horizon / StockGroup
 │                 （策略、出場規則、短線 / 波段、組別代碼，須與 Python 的 STRATEGIES / EXIT_RULES / STOCK_GROUPS 一致）
 ├── repository/   Spring Data JPA 查詢

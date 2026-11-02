@@ -6,7 +6,7 @@ from datetime import date, timedelta
 import pytest
 
 from scraper.backtest import Bars
-from scraper.paper import Account, step_day, trading_days_after
+from scraper.paper import Account, benchmark_values, hold_value, step_day, trading_days_after
 from scraper.portfolio import Stock, simulate_portfolio
 
 DAY0 = date(2026, 1, 5)
@@ -99,3 +99,18 @@ def test_signal_on_close_exit_day_can_buy_again_next_day():
     s = stock(opens=[10] * 8, closes=[10] * 8, signals=[0, 5], strategy="golden_cross")
     _, account, results = replay({"A.TW": s}, slots=1, exit_rule="hold_5", strategy="golden_cross")
     assert [r.day for r in results if r.opened] == [DAY0 + timedelta(days=1), DAY0 + timedelta(days=6)]
+
+
+def test_hold_value_includes_dividends_from_inception_close():
+    s = stock(opens=[10] * 5, closes=[10, 11, 12, 11, 13], signals=[], dividends={2: 0.5, 0: 9.9})
+    inception = DAY0
+    assert hold_value(s, inception, DAY0) == pytest.approx(1.0)
+    assert hold_value(s, inception, DAY0 + timedelta(days=3)) == pytest.approx((11 + 0.5) / 10)  # 啟用日當天的除息不算
+
+
+def test_benchmark_is_equal_weight_and_skips_stocks_without_inception_data():
+    a = stock(opens=[10] * 3, closes=[10, 12, 12], signals=[])
+    b = stock(opens=[20] * 3, closes=[20, 20, 18], signals=[])
+    late = stock(opens=[5] * 2, closes=[5, 6], signals=[], days=[DAY0 + timedelta(days=1), DAY0 + timedelta(days=2)])
+    bench, etf = benchmark_values({"A.TW": a, "B.TW": b, "C.TW": late}, ["A.TW", "B.TW", "C.TW"], DAY0, DAY0 + timedelta(days=2))
+    assert bench == pytest.approx((1.2 + 0.9) / 2) and etf is None

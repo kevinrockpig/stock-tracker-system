@@ -114,6 +114,8 @@ class DayResult:
     updated: list[Position]
     resolved_plans: list[Plan]
     new_plans: list[Plan]
+    benchmark: float | None = None  # 同一批股票自啟用日收盤等額買進持有的價值（啟用日 = 1，含股利）
+    etf: float | None = None  # 0050 ETF 自啟用日收盤買進持有的價值（參考）
 
 
 def _bar(stock: Stock, day: date) -> int | None:
@@ -246,6 +248,26 @@ def step_day(account: Account, day: date, stocks: dict[str, Stock], last_close: 
                      resolved, new_plans)
 
 
+ETF_BENCHMARK = "0050.TW"
+
+
+def hold_value(stock: Stock, inception: date, day: date) -> float | None:
+    """自啟用日收盤買進持有到 day 收盤的價值（啟用日 = 1，現金股利累加，不計交易成本）；啟用日沒有資料則為 None。"""
+    start = stock.index_of.get(inception)
+    if start is None:
+        return None
+    end = max((i for d, i in stock.index_of.items() if d <= day), default=start)
+    dividends = sum(amount for d, amount in stock.bars.dividends.items() if inception < d <= day)
+    return (stock.bars.close[end] + dividends) / stock.bars.close[start]
+
+
+def benchmark_values(stocks: dict[str, Stock], symbols, inception: date, day: date) -> tuple[float | None, float | None]:
+    """（同一批股票等額買進持有, 0050 ETF 買進持有）。"""
+    values = [v for s in symbols if s in stocks and (v := hold_value(stocks[s], inception, day)) is not None]
+    etf = hold_value(stocks[ETF_BENCHMARK], inception, day) if ETF_BENCHMARK in stocks else None
+    return (sum(values) / len(values) if values else None), etf
+
+
 def trading_days_after(stocks: dict[str, Stock], after: date) -> list[date]:
     return sorted({d for s in stocks.values() for d in s.bars.dates if d > after})
 
@@ -280,6 +302,7 @@ def run_paper(engine, symbols) -> list[tuple[Account, list[DayResult]]]:
         day_results = []
         for day in days:  # 啟用日沒有待執行的計畫，只產生新計畫
             result = step_day(account, day, stocks, last_close)
+            result.benchmark, result.etf = benchmark_values(stocks, symbols, account.inception_date, day)
             with engine.begin() as conn:
                 save_paper_day(conn, account, result)
             day_results.append(result)
