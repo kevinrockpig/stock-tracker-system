@@ -1,6 +1,6 @@
 """資料表定義、建表與寫入。
 
-資料表（皆由本服務建立與寫入，Java API 只讀取）：
+資料表（皆由本服務建立；除了最後的使用者資料，也只由本服務寫入，Java API 只讀取）：
   stocks            股票基本資料，一檔一筆
   stock_prices      日 K（OHLCV），同一股票同一交易日只保留一筆
   stock_actions     除權息與股本事件（現金股利、配股 / 減資 / 分割），供回測計算還原報酬
@@ -13,12 +13,18 @@
   reference_levels  參考價位：每檔股票每個交易日收盤後計算一筆（見 levels.py），保留歷史供日後檢視
   official_daily_quotes       證交所 / 櫃買中心開放資料的原始日成交資訊（每日累積，與上面幾張表獨立）
   official_corporate_actions  證交所 / 櫃買中心的除權除息預告（每日累積）
+
+使用者資料（本服務只建表，資料列由 Java API 依登入者寫入；本服務不讀取、不修改）：
+  app_users         使用者，一人一筆
+  user_identities   登入方式（目前為 Google；日後可加自設密碼），同一使用者可有多種
+  holdings          使用者自行填寫的庫存，一筆為一次買進
 """
 
 import pandas as pd
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     Date,
     DateTime,
@@ -414,6 +420,68 @@ official_corporate_actions = Table(
 )
 
 CORPORATE_ACTION_VALUE_COLUMNS = ("name", "action_type", "cash_dividend", "stock_dividend_ratio", "raw")
+
+
+# ---- 使用者資料：只建表，資料列由 Java API 寫入 ----
+
+# 使用者：email 為登入時取得的已驗證 email（小寫），一個 email 只對應一位使用者
+app_users = Table(
+    "app_users",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("email", String(320), nullable=False),
+    Column("display_name", String(100)),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("last_login_at", DateTime(timezone=True)),
+    UniqueConstraint("email", name="uq_app_users_email"),
+)
+
+# 登入方式：provider 為 google（日後可加 password），subject 為該登入方式下不會變的帳號 ID（Google 的 sub）。
+# 與 app_users 分開，日後新增登入方式時，同一位使用者的庫存不需搬移
+user_identities = Table(
+    "user_identities",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False),
+    Column("provider", String(20), nullable=False),
+    Column("subject", String(255), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("last_login_at", DateTime(timezone=True)),
+    UniqueConstraint("provider", "subject", name="uq_user_identities_provider_subject"),
+    Index("ix_user_identities_user", "user_id"),
+)
+
+# 庫存：一筆為一次買進（同一檔可多筆，畫面合併顯示平均成本）。賣出時直接刪除，第一版不記錄已實現損益。
+# 手續費方式：actual 實際金額 / standard 公定費率 / discount 公定費率 × 折數；fee 一律存實際收取或計算後的金額
+HOLDING_FEE_MODES = ("actual", "standard", "discount")
+holdings = Table(
+    "holdings",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False),
+    Column("symbol", String(20), ForeignKey("stocks.symbol"), nullable=False),
+    Column("buy_date", Date),  # 選填：移動停利線、已領股利、同期比較需要
+    Column("price", Numeric(12, 4), nullable=False),  # 每股成交價
+    Column("shares", Integer, nullable=False),  # 股數（1 張 = 1,000 股）
+    Column("fee_mode", String(10), nullable=False),
+    Column("fee_discount", Numeric(5, 4)),  # discount 時的折數（2.8 折為 0.28）
+    Column("min_fee", Numeric(10, 2)),  # standard / discount 時的最低手續費（依券商而異）
+    Column("fee", Numeric(14, 2), nullable=False),  # 買進手續費（元）
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    CheckConstraint("price > 0", name="ck_holdings_price"),
+    CheckConstraint("shares > 0", name="ck_holdings_shares"),
+    CheckConstraint("fee >= 0", name="ck_holdings_fee"),
+    CheckConstraint("min_fee IS NULL OR min_fee >= 0", name="ck_holdings_min_fee"),
+    CheckConstraint(
+        "fee_mode IN (" + ", ".join(f"'{mode}'" for mode in HOLDING_FEE_MODES) + ")", name="ck_holdings_fee_mode",
+    ),
+    CheckConstraint(
+        "(fee_mode = 'discount') = (fee_discount IS NOT NULL) AND (fee_discount IS NULL OR (fee_discount > 0 AND fee_discount <= 1))",
+        name="ck_holdings_fee_discount",
+    ),
+    Index("ix_holdings_user", "user_id"),
+)
 
 
 class SchemaMismatchError(RuntimeError):
