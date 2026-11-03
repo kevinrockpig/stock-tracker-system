@@ -92,3 +92,8 @@ export function fetchLevels(symbol) {
 export function fetchPortfolio(scope = 'ALL') {
   return getJson(`/api/portfolio-backtests?${new URLSearchParams({ scope })}`)
 }
+
+// 交易計畫與往後實測：每個觀察中策略一個模擬帳戶（下一個交易日的計畫、持股、已出場交易、每日資金與基準）
+export function fetchPaper() {
+  return getJson('/api/paper')
+}

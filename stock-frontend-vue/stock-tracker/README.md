@@ -7,6 +7,7 @@
 | 股票清單 | `/?q=南亞&group=CUSTOM&sort=change` | `GET /api/stocks`、`GET /api/groups` |
 | 個股 K 線圖 | `/stocks/2330.TW?strategy=ma_bullish&exitRule=hold_5` | `GET /api/stocks/{symbol}/history?from=…`、`GET /api/stocks/{symbol}/levels`、`GET /api/backtests?scope={symbol}`、`GET /api/stocks/{symbol}/trades?strategy=…&exitRule=…` |
 | 策略選股 | `/screener?strategy=high_120&days=10&scope=TW50` | `GET /api/strategies`、`GET /api/screener?strategy=…&days=…`、`GET /api/stocks`、`GET /api/groups`、`GET /api/backtests?scope=…` |
+| 交易計畫（往後實測） | `/plan?account=high_120/trailing_nocap#plan-positions` | `GET /api/paper` |
 | 回測比較（投資組合） | `/portfolio?scope=TW50&sort=cagr&strategy=high_120` | `GET /api/groups`、`GET /api/portfolio-backtests?scope=…` |
 | 使用說明 | `/about#backtest` | `GET /api/strategies`、`GET /api/backtests` |
 
@@ -31,6 +32,11 @@
 回測比較頁（`/portfolio`）：投資組合回測（一筆共用資金、最多同時持有 10 檔）的 24 組結果，可依 Calmar / 年化報酬 / 最大回撤排序、
 切換全部合併 / 組別；最上方固定顯示同一批股票的買進持有（判定基準）與 0050 ETF（參考），每組標示標準 1、標準 2 與「有效策略」，
 高於買進持有的 Calmar 以藍色粗體標示。從策略選股頁的回測區塊連過來時（`strategy`）會標示該策略的列。手機寬度時一列一張卡片。
+
+交易計畫頁（`/plan`）：模擬帳戶（Python `scraper/paper.py` 每個交易日處理一次）的概況與同期基準、下一個交易日的計畫
+（賣出附出場線；買進候選依順序列出，超過空位的標為預計略過，附放棄價與 ATR 停損參考）、目前持股（依距出場線由近到遠，
+小於 5% 以橘色標示，下一個交易日要賣的加註）、資金曲線（`src/components/EquityChart.vue`，與兩個基準比較，ECharts 進入此頁才載入）、
+最近一次的執行結果與已出場交易。上方有段落連結；觀察中策略不只一個時以按鈕切換（網址 `account`）。
 
 參考價位（個股頁，資料由 Python 每日收盤後計算）：價位表依價格由高到低列出漲跌停、60 日高低點、黃金分割、收盤價、ATR 停損，
 並顯示距收盤的百分比；有除權息預告時顯示提醒（下一個交易日除息時說明參考價已扣除股利）。

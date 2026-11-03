@@ -11,6 +11,7 @@ const route = useRoute()
     <nav class="site-nav" aria-label="主選單">
       <RouterLink to="/" :class="{ 'router-link-active': route.name === 'stock-detail' }">股票清單</RouterLink>
       <RouterLink :to="{ name: 'screener' }">策略選股</RouterLink>
+      <RouterLink :to="{ name: 'paper' }">交易計畫</RouterLink>
       <RouterLink :to="{ name: 'portfolio' }">回測比較</RouterLink>
       <RouterLink :to="{ name: 'about' }">使用說明</RouterLink>
     </nav>
@@ -40,10 +41,26 @@ const route = useRoute()
 }
 
 .site-nav a {
+  flex-shrink: 0;
   padding: 4px 10px;
   border-radius: 6px;
   color: #444;
   font-size: 14px;
+  white-space: nowrap;
+}
+
+/* 手機：縮小間距讓 5 個項目排成一行；更窄的螢幕可左右滑動，不會擠成兩行 */
+@media (max-width: 600px) {
+  .site-nav {
+    gap: 1px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .site-nav a {
+    padding: 4px 3px;
+    font-size: 13px;
+  }
 }
 
 .site-nav a:hover {
