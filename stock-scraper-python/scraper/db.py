@@ -14,7 +14,8 @@
   official_daily_quotes       證交所 / 櫃買中心開放資料的原始日成交資訊（每日累積，與上面幾張表獨立）
   official_corporate_actions  證交所 / 櫃買中心的除權除息預告（每日累積）
 
-使用者資料（本服務只建表，資料列由 Java API 依登入者寫入；本服務不讀取、不修改）：
+使用者資料（本服務只建表，資料列由 Java API 依登入者寫入；本服務不修改，
+只讀取 holdings 的股票代號，讓庫存中的股票從觀察名單移除後仍每日更新）：
   app_users         使用者，一人一筆
   user_identities   登入方式（目前為 Google；日後可加自設密碼），同一使用者可有多種
   holdings          使用者自行填寫的庫存，一筆為一次買進
@@ -544,6 +545,13 @@ def delete_before_listing(conn: Connection, symbol: str, listed_date) -> int:
         stock_prices.delete().where(stock_prices.c.symbol == symbol, stock_prices.c.trade_date < listed_date)
     )
     return result.rowcount
+
+
+def load_held_stocks(conn: Connection) -> dict[str, str]:
+    """庫存中的股票（代號 → 名稱），每日更新時與觀察名單一起抓取。只讀股票代號，不讀使用者與買進內容。"""
+    held = select(holdings.c.symbol).distinct().scalar_subquery()
+    rows = conn.execute(select(stocks.c.symbol, stocks.c.name).where(stocks.c.symbol.in_(held)).order_by(stocks.c.symbol))
+    return dict(rows.tuples().all())
 
 
 def clear_removed_groups(conn: Connection, symbols) -> int:

@@ -112,7 +112,9 @@ public class HoldingService {
         }
         String symbol = Optional.ofNullable(request.symbol()).map(s -> s.trim().toUpperCase(Locale.ROOT))
                 .filter(s -> !s.isEmpty()).orElseThrow(() -> badRequest("請填寫股票代號"));
-        Stock stock = stockRepository.findById(symbol).filter(s -> s.getGroupCodes() != null)
+        // 新增須在觀察名單內；已從觀察名單移除的股票仍可修改原本那筆（Python 每日更新會繼續抓庫存中的股票）
+        boolean sameSymbol = symbol.equals(holding.getSymbol());
+        Stock stock = stockRepository.findById(symbol).filter(s -> s.getGroupCodes() != null || sameSymbol)
                 .orElseThrow(() -> badRequest("股票 " + symbol + " 不在觀察名單內"));
 
         BigDecimal price = request.price();

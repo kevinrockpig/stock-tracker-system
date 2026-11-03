@@ -2,7 +2,9 @@
 # 每日更新，輸出附加到 logs/daily-YYYY-MM.log：
 #   1. yfinance 擷取觀察名單日 K → 計算技術指標 → 掃描策略 → 回測 → 參考價位（python -m scraper.main）
 #   2. 累積證交所 / 櫃買中心的官方開放資料（python -m scraper.official）
-# 兩個步驟互相獨立：第 1 步失敗仍會執行第 2 步（官方資料只提供當天，漏抓無法補回）。
+#   3. 資料健康檢查（python -m scraper.health，唯讀）：yfinance 漏抓當天、價格未調整、停牌沒有股數變動紀錄等
+# 前兩個步驟互相獨立：第 1 步失敗仍會執行第 2 步（官方資料只提供當天，漏抓無法補回）。
+# 第 3 步放最後，才能比對 yfinance 與當天的官方資料。
 #
 # 手動執行：./scripts/run_daily.sh，或在 Finder 點兩下 scripts/update-stock-data.command
 # 自動排程：scripts/install_schedule.sh 安裝後，由 launchd 以 --scheduled 執行：
@@ -10,8 +12,9 @@
 #   - 結束後以 macOS 通知顯示結果
 # 休市日（國定假日、颱風假）執行也不會出錯：沒有新的交易日，結果維持前一個交易日。
 #
-# exit code：0 成功、1 部分股票或來源失敗、2 設定錯誤、3 資料庫錯誤、75 已有更新正在執行
-#（兩個步驟都失敗時，回傳數字較大的那個）
+# exit code：0 成功、1 部分股票或來源失敗、2 設定錯誤、3 資料庫錯誤、
+#           4 更新成功但資料檢查發現異常（或無法執行）、75 已有更新正在執行
+#（前兩個步驟都失敗時，回傳數字較大的那個；更新本身失敗時不另外回報資料檢查結果，細節都在 log）
 
 set -u
 cd "$(dirname "$0")/.." || exit 1
@@ -29,6 +32,7 @@ status_message() {
     1) echo "部分股票或官方資料來源更新失敗，請查看紀錄。" ;;
     2) echo "設定錯誤：請檢查 stock-scraper-python/.env。" ;;
     3) echo "資料庫連線或結構錯誤，請查看紀錄。" ;;
+    4) echo "更新完成，但資料檢查發現異常或無法執行，請查看紀錄。" ;;
     75) echo "已有更新正在執行中，這次沒有執行。" ;;
     *) echo "發生未預期的錯誤（exit $1），請查看紀錄。" ;;
   esac
@@ -39,7 +43,11 @@ notify() {
   local status=$1
   local title="股票資料更新"
   # 75（已有更新在執行）不算失敗
-  [[ ${status} -ne 0 && ${status} -ne 75 ]] && title="股票資料更新失敗"
+  case ${status} in
+    0 | 75) ;;
+    4) title="股票資料檢查有異常" ;;
+    *) title="股票資料更新失敗" ;;
+  esac
   local output
   if output=$(osascript -e "display notification \"$(status_message "${status}")\" with title \"${title}\"" 2>&1); then
     echo "已送出通知：${title}" >> "${LOG_FILE}"
@@ -96,13 +104,17 @@ wait_for_network() {
 run() {
   echo "===== $(date '+%Y-%m-%d %H:%M:%S') 開始$(${SCHEDULED} && echo '（排程）') ====="
   ${SCHEDULED} && wait_for_network
-  echo "----- 1/2 觀察名單（yfinance）-----"
+  echo "----- 1/3 觀察名單與庫存中的股票（yfinance）-----"
   ./venv/bin/python -m scraper.main
   local main_status=$?
-  echo "----- 2/2 官方開放資料累積（證交所 / 櫃買中心）-----"
+  echo "----- 2/3 官方開放資料累積（證交所 / 櫃買中心）-----"
   ./venv/bin/python -m scraper.official
   local official_status=$?
+  echo "----- 3/3 資料健康檢查 -----"
+  ./venv/bin/python -m scraper.health
+  local health_status=$?
   local status=$(( main_status > official_status ? main_status : official_status ))
+  (( status == 0 && health_status != 0 )) && status=4
   echo "===== $(date '+%Y-%m-%d %H:%M:%S') 結束（exit ${status}）：$(status_message "${status}") ====="
   echo
   return "${status}"

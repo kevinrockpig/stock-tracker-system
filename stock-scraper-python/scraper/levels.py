@@ -30,8 +30,14 @@ import pandas as pd
 from sqlalchemy import create_engine
 
 from scraper.backtest import TRAILING_ATR_MULTIPLE, is_etf
-from scraper.config import WATCHLIST, ConfigError, build_database_url
-from scraper.db import init_schema, load_level_inputs, load_next_corporate_action, upsert_reference_levels
+from scraper.config import WATCHLIST, ConfigError, build_database_url, tracked_stocks
+from scraper.db import (
+    init_schema,
+    load_held_stocks,
+    load_level_inputs,
+    load_next_corporate_action,
+    upsert_reference_levels,
+)
 
 logger = logging.getLogger("scraper.levels")
 
@@ -188,7 +194,9 @@ def main() -> None:
     try:
         engine = create_engine(build_database_url(), pool_pre_ping=True, connect_args={"connect_timeout": 15})
         init_schema(engine)
-        log_levels(run_reference_levels(engine, WATCHLIST))
+        with engine.connect() as conn:
+            held = load_held_stocks(conn)
+        log_levels(run_reference_levels(engine, list(tracked_stocks(WATCHLIST, held))))
     except ConfigError as exc:
         logger.error("設定錯誤：%s", exc)
         sys.exit(2)

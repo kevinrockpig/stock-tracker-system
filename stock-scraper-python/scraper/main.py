@@ -1,5 +1,8 @@
 """執行入口：python -m scraper.main [--full]（每日排程見 scripts/run_daily.sh）
 
+更新的股票：觀察名單＋庫存中的股票（從觀察名單移除但仍有人持有時繼續更新，庫存的價格與停利線才不會停住）。
+回測、投資組合回測與交易計畫只使用觀察名單。
+
 每檔股票：
 1. 增量抓取：從資料庫最新的日期接著抓（往前重疊 OVERLAP_TRADING_DAYS 個交易日）；
    資料庫還沒有 HISTORY_START 起的完整歷史，或 Yahoo 重新調整了歷史價格時，改抓完整歷史
@@ -8,7 +11,7 @@
 3. 全部股票完成後，依最新訊號重新計算策略回測（scraper/backtest.py）
 4. 投資組合回測：共用資金、最多同時持有 10 檔（scraper/portfolio.py）
 5. 交易計畫：觀察中策略的模擬帳戶逐日執行並產生下一個交易日的計畫（scraper/paper.py）
-6. 計算下一個交易日的參考價位（scraper/levels.py）
+6. 計算下一個交易日的參考價位（scraper/levels.py；庫存頁的除權息提醒也來自這裡）
 """
 
 import argparse
@@ -26,6 +29,7 @@ from scraper.config import (
     ConfigError,
     groups_of,
     build_database_url,
+    tracked_stocks,
     env_file_permission_warning,
 )
 from scraper.db import (
@@ -38,6 +42,7 @@ from scraper.db import (
     get_history_from,
     init_schema,
     load_closes,
+    load_held_stocks,
     load_prices,
     load_share_change_dates,
     load_strategy_inputs,
@@ -123,10 +128,20 @@ def run(force_full: bool = False) -> int:
         logger.warning("無法取得官方上市 / 上櫃日期，沿用資料庫中的紀錄：%s", exc)
         listing_dates = {}
 
+    try:
+        with engine.connect() as conn:
+            held = load_held_stocks(conn)
+    except SQLAlchemyError as exc:
+        logger.warning("無法讀取庫存中的股票，只更新觀察名單：%s", getattr(exc, "orig", exc))
+        held = {}
+    targets = tracked_stocks(WATCHLIST, held)
+    if extra := [symbol for symbol in targets if symbol not in WATCHLIST]:
+        logger.info("庫存中不在觀察名單的股票 %d 檔，一併更新：%s", len(extra), "、".join(extra))
+
     failed = []
     dates_by_symbol = {}
     latest_signals = {}  # symbol → (最新交易日, 當天符合的策略)
-    for symbol, name in WATCHLIST.items():
+    for symbol, name in targets.items():
         try:
             listed = listing_dates.get(market_code(symbol))
             if listed is None and not listing_dates:
@@ -199,7 +214,8 @@ def run(force_full: bool = False) -> int:
         if removed_count := clear_removed_groups(conn, WATCHLIST):
             logger.info("已從觀察名單移除 %d 檔（資料保留，清除組別）", removed_count)
     warn_missing_dates(dates_by_symbol)
-    log_strategy_summary(latest_signals)
+    # 策略選股結果只列觀察名單（與網站的策略選股頁相同）
+    log_strategy_summary({s: v for s, v in latest_signals.items() if s in WATCHLIST})
     try:
         log_summary(run_backtest(engine, WATCHLIST))
     except Exception:
@@ -219,13 +235,13 @@ def run(force_full: bool = False) -> int:
         logger.exception("交易計畫失敗（其他結果已寫入，不受影響）")
         failed.append("交易計畫")
     try:
-        log_levels(run_reference_levels(engine, WATCHLIST))
+        log_levels(run_reference_levels(engine, list(targets)))
     except Exception:
         logger.exception("參考價位計算失敗（日 K、指標、訊號與回測已寫入，不受影響）")
         failed.append("參考價位")
     engine.dispose()
-    failed_symbols = [s for s in failed if s in WATCHLIST]
-    logger.info("完成：成功 %d 檔，失敗 %d 檔 %s", len(WATCHLIST) - len(failed_symbols), len(failed_symbols), failed or "")
+    failed_symbols = [s for s in failed if s in targets]
+    logger.info("完成：成功 %d 檔，失敗 %d 檔 %s", len(targets) - len(failed_symbols), len(failed_symbols), failed or "")
     return 1 if failed else 0
 
 

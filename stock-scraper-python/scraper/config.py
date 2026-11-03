@@ -63,6 +63,14 @@ def groups_of(symbol: str) -> list[str]:
     """這檔股票所屬的組別代碼（依 STOCK_GROUPS 的順序）。"""
     return [code for code, group in STOCK_GROUPS.items() if symbol in group["stocks"]]
 
+
+def tracked_stocks(watchlist: dict[str, str], held: dict[str, str]) -> dict[str, str]:
+    """每日更新的股票：觀察名單在前，再加上不在觀察名單內的庫存股票（代號 → 名稱）。
+
+    股票從觀察名單移除（例如 0050 調整成分股）但仍有人持有時繼續更新，庫存的價格與停利線才不會停住。
+    """
+    return {**watchlist, **{symbol: name for symbol, name in held.items() if symbol not in watchlist}}
+
 # 增量抓取：資料已存在自己的資料庫，每次只從資料庫最新的日期接著抓，並往前重疊這麼多個交易日：
 # - 比對重疊日期的收盤價，偵測 Yahoo 是否因配股、減資、分割重新調整了歷史價格（見 fetcher.detect_readjustment）
 # - 接收 Yahoo 對最近幾天的修正（例如成交量事後更正）

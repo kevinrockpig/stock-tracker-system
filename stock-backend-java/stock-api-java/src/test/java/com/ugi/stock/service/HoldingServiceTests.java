@@ -4,6 +4,7 @@ import com.ugi.stock.dto.HoldingRequest;
 import com.ugi.stock.dto.HoldingsResponse;
 import com.ugi.stock.dto.HoldingsResponse.Lot;
 import com.ugi.stock.dto.HoldingsResponse.Position;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,6 +36,8 @@ class HoldingServiceTests {
     private AppUserService users;
     @Autowired
     private JdbcTemplate jdbc;
+    @Autowired
+    private EntityManager em;
 
     private long alice;
     private long bob;
@@ -135,6 +138,25 @@ class HoldingServiceTests {
         assertThatThrownBy(() -> service.create(alice, standard("2330.TW", null, "100", 1)))
                 .isInstanceOf(ResponseStatusException.class).hasMessageContaining("最多");
         service.create(bob, standard("2330.TW", null, "100", 1)); // 別人不受影響
+    }
+
+    @Test
+    void removedFromWatchlistStillEditable() {
+        Lot held = service.create(alice, standard("2330.TW", null, "1000", 1000));
+        Lot other = service.create(alice, standard("2454.TW", null, "1000", 1000));
+        // 模擬 2330 從觀察名單移除（Python 清除組別；交易結束時還原）
+        jdbc.update("update stocks set group_codes = null where symbol = '2330.TW'");
+        em.clear();
+
+        // 原本那筆仍可修改，庫存照常顯示
+        assertThat(service.update(alice, held.id(), standard("2330.TW", null, "1100", 1000)).price()).isEqualByComparingTo("1100");
+        assertThat(service.getHoldings(alice).positions()).extracting(Position::symbol).contains("2330.TW");
+        // 不能新增，也不能把別的股票改成它
+        for (Runnable change : new Runnable[]{
+                () -> service.create(alice, standard("2330.TW", null, "1000", 1)),
+                () -> service.update(alice, other.id(), standard("2330.TW", null, "1000", 1))}) {
+            assertThatThrownBy(change::run).isInstanceOf(ResponseStatusException.class).hasMessageContaining("不在觀察名單");
+        }
     }
 
     // ---- 分析：與 SQL 重算比對 ----

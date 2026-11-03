@@ -96,11 +96,15 @@ FROM stock_indicators
 WHERE rsi6 NOT BETWEEN 0 AND 100 OR rsi12 NOT BETWEEN 0 AND 100
    OR kd_k NOT BETWEEN 0 AND 100 OR kd_d NOT BETWEEN 0 AND 100;
 
--- 12. 最近一年內仍為 NULL 的指標（暖身期應早於最近一年）：應回傳 0 列
+-- 12. 暖身期之後仍為 NULL 的指標：應回傳 0 列
+--     每檔前 120 筆（indicators.WARMUP_BARS）不輸出 MACD、RSI、KD，新上市股票在這段期間為 NULL 屬正常
 SELECT symbol, trade_date
-FROM stock_indicators
-WHERE trade_date >= CURRENT_DATE - INTERVAL '1 year'
-  AND (ma60 IS NULL OR macd_dif IS NULL OR rsi12 IS NULL OR kd_d IS NULL)
+FROM (
+    SELECT symbol, trade_date, ma60, macd_dif, rsi12, kd_d,
+           ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY trade_date) AS n
+    FROM stock_indicators
+) t
+WHERE n > 120 AND (ma60 IS NULL OR macd_dif IS NULL OR rsi12 IS NULL OR kd_d IS NULL)
 ORDER BY symbol, trade_date;
 
 -- 13. 各策略的訊號數量與最近一次出現日期
