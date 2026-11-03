@@ -71,11 +71,15 @@ npm install
 npm run dev          # http://localhost:5173
 ```
 
-Java 端 CORS 只允許 `http://localhost:5173`；若 5173 被占用，Vite 會直接報錯而不是改用其他 port。
+Google 登入的回呼網址固定為 `http://localhost:5173/login/oauth2/code/google`；若 5173 被占用，Vite 會直接報錯而不是改用其他 port。
 
 ## API 位址
 
-預設 `http://localhost:8081`。要改用其他位址時，複製 `.env.example` 為 `.env.local` 並修改 `VITE_API_BASE_URL`，再重新執行 `npm run dev`。
+前端以相對路徑呼叫 API（`/api/...`），開發時由 Vite 把 `/api`、`/oauth2`、`/login/oauth2` 轉發給 Java（預設 `http://localhost:8081`，
+可用環境變數 `API_PROXY_TARGET` 改變）。前端與 API 同一個來源，登入的 session cookie 才會隨請求送出。
+
+正式部署時也需要讓前端與 API 在同一個網域（例如由反向代理把 `/api` 等路徑轉給 Java）。
+`VITE_API_BASE_URL` 仍可指定其他來源（見 `.env.example`），但此時登入功能無法使用。
 
 ## 建置
 

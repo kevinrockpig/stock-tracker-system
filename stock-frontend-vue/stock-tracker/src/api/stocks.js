@@ -1,6 +1,7 @@
 // Java API 呼叫。Vue 只透過 Java API 取得資料，不直接連線資料庫。
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8081'
+// 預設與前端同一個來源（開發時由 Vite 轉發給 Java，見 vite.config.js）；登入需要同一個來源才能帶 session cookie
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 
 // Neon 閒置休眠後，Java 第一次查詢需要喚醒資料庫，因此給較寬鬆的逾時
 const TIMEOUT_MS = 20000
@@ -24,7 +25,7 @@ async function getJson(path) {
       throw new Error(`API 超過 ${TIMEOUT_MS / 1000} 秒沒有回應`)
     }
     // 連線被拒與 CORS 被擋在瀏覽器中都是這個錯誤，詳細原因請看開發者工具 Console
-    throw new Error(`無法連線到 API（${API_BASE_URL}），請確認 Java 服務已啟動`)
+    throw new Error(`無法連線到 API（${API_BASE_URL || '經由前端伺服器轉發'}），請確認 Java 服務已啟動`)
   } finally {
     clearTimeout(timer)
   }
