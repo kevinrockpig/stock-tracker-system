@@ -55,6 +55,6 @@ class CsrfHttpTests {
         assertThat(response.statusCode()).isEqualTo(200);
         assertThat(response.headers().firstValue("X-Content-Type-Options")).hasValue("nosniff");
         assertThat(response.headers().firstValue("X-Frame-Options")).hasValue("DENY");
-        assertThat(List.copyOf(response.headers().allValues("Set-Cookie"))).noneMatch(c -> c.startsWith("JSESSIONID")); // 沒登入不建立 session
+        assertThat(List.copyOf(response.headers().allValues("Set-Cookie"))).noneMatch(c -> c.startsWith("SESSION=") || c.startsWith("JSESSIONID")); // 沒登入不建立 session
     }
 }

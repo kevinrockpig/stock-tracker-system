@@ -250,7 +250,11 @@ python -m scraper.levels       # 依資料庫最新的日 K 計算（每日 scra
 `app_users`（使用者，email 唯一）、`user_identities`（登入方式：目前為 Google，日後可加自設密碼；同一使用者可有多種）、
 `holdings`（使用者自行填寫的庫存，一筆為一次買進）。
 
-這三張表**只由本服務建立**（`init_schema`，每次執行 `scraper.main` 時檢查），資料列由 Java API 依登入者寫入；本服務不讀取、不修改。
+這三張表**只由本服務建立**（`init_schema`，每次執行 `scraper.main` 時檢查），資料列由 Java API 依登入者寫入；
+本服務只讀取 `holdings` 的股票代號（每日更新庫存中的股票），不讀取其他內容、不修改。
+
+`spring_session` / `spring_session_attributes`：Java 的登入狀態（Spring Session JDBC），主機重新啟動或部署後不會被登出。
+結構與 spring-session-jdbc 官方的 `schema-postgresql.sql` 完全相同（2026-11-03 以 `pg_dump` 比對），同樣只由本服務建立。
 資料庫層的檢查：價格與股數大於 0、手續費不為負、手續費方式只能是 `actual` / `standard` / `discount`、
 折數只在 `discount` 時填寫且介於 0～1、股票代號必須在 `stocks`；刪除使用者時一併刪除其登入方式與庫存。
 

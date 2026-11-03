@@ -1,0 +1,12 @@
+# 只放入建置網站映像需要的檔案（白名單）：.env、log、venv、node_modules、私人筆記等一律不會進入映像
+*
+!stock-frontend-vue/stock-tracker/package.json
+!stock-frontend-vue/stock-tracker/package-lock.json
+!stock-frontend-vue/stock-tracker/index.html
+!stock-frontend-vue/stock-tracker/vite.config.js
+!stock-frontend-vue/stock-tracker/src
+!stock-backend-java/stock-api-java/pom.xml
+!stock-backend-java/stock-api-java/mvnw
+!stock-backend-java/stock-api-java/.mvn
+!stock-backend-java/stock-api-java/src/main
+**/.DS_Store

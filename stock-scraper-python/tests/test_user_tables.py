@@ -49,3 +49,23 @@ def test_user_tables_created_after_stocks():
     order = [t.name for t in db.metadata.sorted_tables]
     assert order.index("app_users") < order.index("holdings")
     assert order.index("stocks") < order.index("holdings")
+
+
+def test_spring_session_tables_match_official_schema():
+    # 與 spring-session-jdbc 的 schema-postgresql.sql 相同（Java 以這些名稱查詢）
+    session, attributes = db.spring_session, db.spring_session_attributes
+    assert [c.name for c in session.columns] == [
+        "primary_id", "session_id", "creation_time", "last_access_time", "max_inactive_interval", "expiry_time", "principal_name",
+    ]
+    assert {c.name for c in session.columns if c.nullable} == {"principal_name"}
+    assert session.primary_key.name == "spring_session_pk"
+    assert {(i.name, tuple(c.name for c in i.columns), i.unique) for i in session.indexes} == {
+        ("spring_session_ix1", ("session_id",), True),
+        ("spring_session_ix2", ("expiry_time",), False),
+        ("spring_session_ix3", ("principal_name",), False),
+    }
+    assert [c.name for c in attributes.columns] == ["session_primary_id", "attribute_name", "attribute_bytes"]
+    assert not any(c.nullable for c in attributes.columns)
+    assert attributes.primary_key.name == "spring_session_attributes_pk"
+    fk = next(iter(attributes.c.session_primary_id.foreign_keys))
+    assert fk.column is session.c.primary_id and fk.ondelete == "CASCADE"

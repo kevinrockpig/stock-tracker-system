@@ -19,10 +19,14 @@
   app_users         使用者，一人一筆
   user_identities   登入方式（目前為 Google；日後可加自設密碼），同一使用者可有多種
   holdings          使用者自行填寫的庫存，一筆為一次買進
+  spring_session / spring_session_attributes
+                    登入狀態（Java 的 Spring Session JDBC 讀寫；主機重新啟動或部署後不會被登出），
+                    結構與 spring-session-jdbc 官方的 schema-postgresql.sql 相同
 """
 
 import pandas as pd
 from sqlalchemy import (
+    CHAR,
     BigInteger,
     Boolean,
     CheckConstraint,
@@ -37,6 +41,7 @@ from sqlalchemy import (
     Integer,
     MetaData,
     Numeric,
+    PrimaryKeyConstraint,
     String,
     Table,
     UniqueConstraint,
@@ -47,7 +52,7 @@ from sqlalchemy import (
     text,
     tuple_,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import BYTEA, JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 
@@ -482,6 +487,36 @@ holdings = Table(
         name="ck_holdings_fee_discount",
     ),
     Index("ix_holdings_user", "user_id"),
+)
+
+# 登入狀態（Spring Session JDBC）：欄位、索引名稱與官方 schema-postgresql.sql 相同（Java 以不加引號的大寫名稱查詢，
+# PostgreSQL 會轉成小寫）。時間為 epoch 毫秒；過期的資料由 Java 定時清除（spring.session.jdbc.cleanup-cron）
+spring_session = Table(
+    "spring_session",
+    metadata,
+    Column("primary_id", CHAR(36), nullable=False),
+    Column("session_id", CHAR(36), nullable=False),
+    Column("creation_time", BigInteger, nullable=False),
+    Column("last_access_time", BigInteger, nullable=False),
+    Column("max_inactive_interval", Integer, nullable=False),
+    Column("expiry_time", BigInteger, nullable=False),
+    Column("principal_name", String(100)),
+    PrimaryKeyConstraint("primary_id", name="spring_session_pk"),
+    Index("spring_session_ix1", "session_id", unique=True),
+    Index("spring_session_ix2", "expiry_time"),
+    Index("spring_session_ix3", "principal_name"),
+)
+
+spring_session_attributes = Table(
+    "spring_session_attributes",
+    metadata,
+    Column("session_primary_id", CHAR(36), nullable=False),
+    Column("attribute_name", String(200), nullable=False),
+    Column("attribute_bytes", BYTEA, nullable=False),
+    PrimaryKeyConstraint("session_primary_id", "attribute_name", name="spring_session_attributes_pk"),
+    ForeignKeyConstraint(
+        ["session_primary_id"], ["spring_session.primary_id"], ondelete="CASCADE", name="spring_session_attributes_fk",
+    ),
 )
 
 

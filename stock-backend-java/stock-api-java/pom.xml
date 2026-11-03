@@ -43,6 +43,11 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security-oauth2-client</artifactId>
         </dependency>
+        <!-- 登入狀態存在資料庫（spring_session 資料表由 Python 建立），主機重新啟動或部署後不會被登出 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-session-jdbc</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>org.postgresql</groupId>

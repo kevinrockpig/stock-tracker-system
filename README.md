@@ -21,7 +21,8 @@ flowchart LR
 
 職責分離原則：
 
-- **只有 Python 寫入資料庫**，資料表也由 Python 建立；Java 只讀取（啟動時以 `ddl-auto=validate` 檢查結構）
+- **資料表一律由 Python 建立**；行情、指標、回測等只由 Python 寫入，Java 只讀取（啟動時以 `ddl-auto=validate` 檢查結構）。
+  Java 只寫入使用者資料（帳號、庫存）與登入狀態
 - **Vue 只透過 Java API 取得資料**，不直接連線資料庫
 - 技術指標與策略都由 Python 計算後存入資料庫，圖表與選股使用同一份數字
 
@@ -49,11 +50,31 @@ flowchart LR
 | `DB_USERNAME` | ✓ | ✓ | 資料庫帳號 |
 | `DB_PASSWORD` | ✓ | ✓ | 資料庫密碼 |
 | `PORT` |  | ✓ | Java API port，預設 8081 |
-| `VITE_API_BASE_URL` |  |  | Vue 使用的 API 位址，預設 `http://localhost:8081`（會打包進前端，只能放公開資訊） |
+| `VITE_API_BASE_URL` |  |  | Vue 使用的 API 位址，預設空白（相對路徑：開發時經 Vite 轉發，部署後與網頁同一個網址；會打包進前端，只能放公開資訊） |
+
+Java 另有登入（Google）、轉回網址、cookie、請求頻率限制等變數，見 [Java README](stock-backend-java/stock-api-java/README.md#環境變數)。
 
 - 真實值放在 `stock-scraper-python/.env`（Python）與 IntelliJ Run Configuration（Java），兩者都不會進 Git
 - 各服務提供 `.env.example` 範本，只含佔位符
 - `.env` 建議設為只有自己能讀：`chmod 600 stock-scraper-python/.env`
+
+## 部署（網站）
+
+網站以一個 Docker 映像部署（根目錄的 `Dockerfile`）：Vue build 後的檔案放進 Java，由 Spring Boot 一起提供，
+網頁與 API 同一個網址（登入的 cookie 才能使用）。Python 每日更新不在映像內，另由 GitHub Actions 或本機排程執行。
+
+```bash
+docker build -t stock-tracker .                       # 在 repo 根目錄建置
+docker run -p 8080:8080 -e DB_URL=... -e DB_USERNAME=... -e DB_PASSWORD=... stock-tracker   # 本機試跑
+```
+
+- 映像只包含建置需要的檔案（`.dockerignore` 白名單），`.env` 等機敏資料不會進入映像；連線資訊一律由主機平台的環境變數提供
+- 主機平台需設定的環境變數：`DB_URL`、`DB_USERNAME`、`DB_PASSWORD`、`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`AUTH_ALLOWED_EMAILS`、
+  `SESSION_COOKIE_SECURE=true`、`FRONTEND_URL`（網站網址或空白）；`PORT` 通常由平台提供
+- Google Cloud 的 OAuth 用戶端需另外登記 `https://<網站網址>/login/oauth2/code/google`
+- 記憶體：Java heap 上限 256 MB，實測程序約 350 MB，可在 512 MB 的主機執行；1 個 CPU 約 10 秒啟動、0.5 個約 28 秒
+- 為了節省流量與資料庫用量：回應壓縮、`/assets/` 檔案長期快取、每個 IP 每分鐘最多 200 個請求、閒置時不保留資料庫連線（Neon 可休眠）
+- 選擇主機的評估見 [TODO.md](TODO.md)「確認主機」
 
 ## 資料表
 

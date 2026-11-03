@@ -2,7 +2,8 @@
 
 Spring Boot RESTful API：從 PostgreSQL（Neon）讀取 Python 服務寫入的行情、技術指標、策略訊號與策略回測結果，整理成前端需要的 JSON。
 資料表一律由 `stock-scraper-python` 建立，啟動時以 `ddl-auto=validate` 檢查結構是否一致。行情、回測等資料本服務**只讀取**；
-唯一的寫入是使用者資料（`app_users`、`user_identities`、`holdings`），依登入者寫入。
+唯一的寫入是使用者資料（`app_users`、`user_identities`、`holdings`），依登入者寫入，以及登入狀態（`spring_session`）。
+部署時也一併提供前端（Vue build 後的檔案），見根目錄 README「部署」。
 
 ## 需求
 
@@ -22,8 +23,9 @@ Spring Boot RESTful API：從 PostgreSQL（Neon）讀取 Python 服務寫入的�
 | `GOOGLE_CLIENT_ID` | 否 | Google OAuth 用戶端 ID；未設定時登入功能關閉，其餘 API 照常 |
 | `GOOGLE_CLIENT_SECRET` | 否（登入時必填） | Google OAuth 用戶端密鑰 |
 | `AUTH_ALLOWED_EMAILS` | 否（登入時必填） | 允許登入的 Google 帳號 email，以逗號分隔；空白時任何人都無法登入 |
-| `FRONTEND_URL` | 否 | 登入成功 / 失敗後轉回的前端網址，預設 `http://localhost:5173` |
+| `FRONTEND_URL` | 否 | 登入成功 / 失敗後轉回的前端網址，預設 `http://localhost:5173`；部署後設為網站網址或空白（轉回同一個網址） |
 | `SESSION_COOKIE_SECURE` | 否 | 正式環境（HTTPS）設為 `true`，登入 cookie 只經由 HTTPS 傳送；預設 `false` |
+| `RATE_LIMIT_PER_MINUTE` | 否 | 每個 IP 每分鐘最多請求數（含網頁檔案），超過回 429；預設 `200`，`0` 表示不限制 |
 
 `application.properties` 只有 `${DB_URL}` 這類佔位符，真實值只放在 IntelliJ 的 Run Configuration 或系統環境變數，不寫進任何檔案。
 
@@ -33,7 +35,10 @@ Spring Boot RESTful API：從 PostgreSQL（Neon）讀取 Python 服務寫入的�
   實際網址為 `http://localhost:5173/login/oauth2/code/google`，需在 Google Cloud 的 OAuth 用戶端登記）
 - 只要求 `openid`、`email`、`profile` 三項基本資料；email 必須已由 Google 驗證且在 `AUTH_ALLOWED_EMAILS` 內，
   否則拒絕登入、不寫入任何資料，並轉回 `/holdings?login=not_allowed`
-- 登入狀態存在伺服器端 session（cookie 為 HttpOnly、SameSite=Lax），閒置 12 小時或 Java 重新啟動後需重新登入
+- 登入狀態存在資料庫（Spring Session JDBC，`spring_session` / `spring_session_attributes`，由 Python 建立；cookie 名稱 `SESSION`，
+  HttpOnly、SameSite=Lax），閒置 12 小時後需重新登入；Java 重新啟動或部署後仍保持登入。
+  過期的 session 每天 15:30 清除一次（預設每分鐘一次，會讓 Neon 無法休眠）。
+  升級 Spring Security 的版本後，舊的 session 可能無法讀回，屆時清空 `spring_session` 即可（使用者重新登入）
 - 寫入請求（POST / PUT / DELETE，含 `POST /api/logout`）需附 CSRF token：`GET /api/me` 會寫入 `XSRF-TOKEN` cookie，
   前端把它的值放進 `X-XSRF-TOKEN` 標頭
 - 既有 API 維持公開；`/api/holdings/**` 需要登入，未登入回 401
@@ -121,7 +126,8 @@ src/main/java/com/ugi/stock/
 
 `StockApiJavaApplicationTests.contextLoads` 會啟動完整的 Spring 應用程式，等同檢查「能否連上資料庫，且 Entity 與資料表結構一致」。
 因此執行測試時同樣需要上表的 `DB_*` 環境變數，並會連到該資料庫。會寫入的測試（使用者、庫存：`AppUserServiceDatabaseTests`、`HoldingServiceTests`、`HoldingApiTests`）
-都在交易中執行並於結束時還原（rollback），不會留下資料。`HoldingServiceTests` 以 SQL 直接重算分析數字並逐項比對。登入相關測試使用測試用的假 Google 用戶端，不連線 Google：
+都在交易中執行並於結束時還原（rollback），不會留下資料。測試預設不使用資料庫的 session（`src/test/resources/config/application.properties`），
+只有 `SessionPersistenceTests` 會寫入一筆並在結束時刪除。`HoldingServiceTests` 以 SQL 直接重算分析數字並逐項比對。登入相關測試使用測試用的假 Google 用戶端，不連線 Google：
 
 - **IntelliJ**：測試的執行設定與 `StockApiJavaApplication` 是分開的，需在測試的 Run Configuration 另外填入 `DB_*` 環境變數，否則會出現 `Could not resolve placeholder 'DB_URL'`
 - **終端機**：設定環境變數後執行 `./mvnw test`
@@ -138,3 +144,5 @@ src/main/java/com/ugi/stock/
 | 登入後轉回 `?login=not_allowed` | 該 Google 帳號不在 `AUTH_ALLOWED_EMAILS` |
 | 前端出現 CORS 錯誤 | 前端來源不是 `http://localhost:5173`；調整 `CORS_ALLOWED_ORIGIN` |
 | 第一次請求很慢 | Neon 閒置後會休眠，第一次連線需要喚醒，屬正常現象 |
+| 登入時出現 `relation "spring_session" does not exist` | Python 還沒建立登入狀態資料表；執行一次 `python -m scraper.main`（或等每日排程） |
+| 回應 429「請求太頻繁」 | 同一個 IP 每分鐘超過 `RATE_LIMIT_PER_MINUTE`；開發時大量測試可設為 `0` |

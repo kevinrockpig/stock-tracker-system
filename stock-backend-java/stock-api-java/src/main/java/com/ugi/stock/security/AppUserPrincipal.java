@@ -13,6 +13,9 @@ import java.util.Collection;
  */
 public class AppUserPrincipal extends DefaultOidcUser {
 
+    // 登入狀態以 Java 序列化存在資料庫（spring_session），固定版本號，類別修改後既有的 session 仍可讀回
+    private static final long serialVersionUID = 1L;
+
     private final long userId;
 
     public AppUserPrincipal(long userId, Collection<? extends GrantedAuthority> authorities, OidcIdToken idToken, OidcUserInfo userInfo) {
