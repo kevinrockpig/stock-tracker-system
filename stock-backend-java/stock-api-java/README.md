@@ -2,7 +2,7 @@
 
 Spring Boot RESTful API：從 PostgreSQL（Neon）讀取 Python 服務寫入的行情、技術指標、策略訊號與策略回測結果，整理成前端需要的 JSON。
 資料表一律由 `stock-scraper-python` 建立，啟動時以 `ddl-auto=validate` 檢查結構是否一致。行情、回測等資料本服務**只讀取**；
-唯一的寫入是使用者資料（`app_users`、`user_identities`，以及之後的庫存），依登入者寫入。
+唯一的寫入是使用者資料（`app_users`、`user_identities`、`holdings`），依登入者寫入。
 
 ## 需求
 
@@ -38,6 +38,18 @@ Spring Boot RESTful API：從 PostgreSQL（Neon）讀取 Python 服務寫入的�
   前端把它的值放進 `X-XSRF-TOKEN` 標頭
 - 既有 API 維持公開；`/api/holdings/**` 需要登入，未登入回 401
 
+## 庫存（holdings）
+
+- 一律以登入者過濾：查不到（包含別人的）回 404；每人最多 200 筆；股票必須在觀察名單內，買進日期不可晚於今天、不可早於上市日
+- 手續費：`standard` = 成交金額 × 0.1425%、`discount` 再乘折數，兩者無條件捨去到元並套用最低手續費（未填為 20 元）；
+  `actual` 照填。各券商規則不同，畫面標示為估算
+- 換算基準：價格與股利都是 Yahoo 依分割 / 配股 / 減資調整後的基準。有填買進日期時，依 `stock_actions` 中買進日之後的
+  股數變動倍數換算股數，股利 = 每股股利 × 換算後股數；沒有買進日期時視為已是目前基準，不計股利
+  （Yahoo 漏掉的事件由 Python 的 `scraper/corrections.py` 補上，例如 0050 於 2025-06-18 的 1 拆 4）
+- 賣出成本：手續費依該檔最近一筆的方式（`actual` 以公定費率、最低 20 元估算）＋證交稅（股票 0.3%、ETF 0.1%）
+- 移動停利線：最早買進日以來的最高收盤價 − 3 × 最新 ATR(14)，與模擬帳戶相同
+- 同期比較：每筆有日期的買進，假設同一天（非交易日為下一個交易日）以同樣成本在收盤買 0050，含股利、不計交易成本
+
 ## 執行
 
 **IntelliJ**：Run → Edit Configurations → `StockApiJavaApplication` → Environment variables 填入上表變數 → Run。
@@ -66,6 +78,9 @@ export DB_URL='jdbc:postgresql://<host>:5432/<db>?sslmode=require' DB_USERNAME='
 | `GET /api/paper` | 交易計畫與往後實測：每個觀察中策略的模擬帳戶，包含待執行的計畫（買進候選與放棄價、ATR 停損，賣出與停利線）、當天執行結果、持有中部位（目前價、報酬、市值占比、目前出場線）、已出場交易、每日資金與同期買進持有 / 0050 基準 |
 | `GET /api/me` | 目前的登入狀態（`loginEnabled`、`authenticated`、`email`、`displayName`、`loginUrl`），並寫入 CSRF token cookie |
 | `POST /api/logout` | 登出（需 CSRF token），回 204 |
+| `GET /api/holdings` | **需登入**。自己的庫存與分析：依股票合併的成本、市值、未實現損益（扣賣出手續費與證交稅估算）、已領股利、移動停利線與距離、季線、除權息預告、目前訊號；合計；同期買 0050 比較 |
+| `POST /api/holdings` | **需登入、CSRF**。新增一筆買進：`symbol`、`buyDate`（選填）、`price`、`shares`、`feeMode`（`actual` / `standard` / `discount`）、`feeDiscount`、`minFee`、`fee`；回 201 與該筆內容（含計算出的手續費） |
+| `PUT /api/holdings/{id}` / `DELETE /api/holdings/{id}` | **需登入、CSRF**。修改 / 刪除自己的一筆；別人的或不存在回 404 |
 | `GET /api/stocks/{symbol}/trades?strategy=&exitRule=` | 某檔股票的歷史回測交易（進出場日期、價格、股利、報酬）；`exitRule` 短線為 `hold_5`、`hold_10`、`hold_20`、`trailing_atr`，波段為 `ma60_exit`、`trailing_nocap`；波段策略只搭配波段出場（其他組合回 400） |
 
 ```bash
@@ -92,21 +107,21 @@ src/main/java/com/ugi/stock/
 ├── controller/   StockController（/api/stocks）、StrategyController（/api/strategies、/api/screener）、
 │                 BacktestController（/api/backtests、/api/stocks/{symbol}/trades）、
 │                 ReferenceLevelController（/api/stocks/{symbol}/levels）、StockGroupController（/api/groups）、
-│                 PortfolioController（/api/portfolio-backtests）、PaperController（/api/paper）、AuthController（/api/me）
-├── service/      StockService、StrategyService、BacktestService、PortfolioService、PaperService、ReferenceLevelService、AppUserService、
+│                 PortfolioController（/api/portfolio-backtests）、PaperController（/api/paper）、AuthController（/api/me）、HoldingController（/api/holdings）
+├── service/      StockService、StrategyService、BacktestService、PortfolioService、PaperService、ReferenceLevelService、AppUserService、HoldingService、TradingCosts（交易成本）、
 │                 Strategy / ExitRule / Horizon / StockGroup
 │                 （策略、出場規則、短線 / 波段、組別代碼，須與 Python 的 STRATEGIES / EXIT_RULES / STOCK_GROUPS 一致）
 ├── repository/   Spring Data JPA 查詢
 ├── security/     SecurityConfig（存取控制、CSRF、Google 登入）、AuthSettings（允許名單）、AllowedUserOidcService、AppUserPrincipal
-├── entity/       對應資料表；行情與回測標記 @Immutable（唯讀），AppUser / UserIdentity 可寫入
+├── entity/       對應資料表；行情與回測標記 @Immutable（唯讀），AppUser / UserIdentity / Holding 可寫入
 └── dto/          API 回應格式（Java record）
 ```
 
 ## 測試
 
 `StockApiJavaApplicationTests.contextLoads` 會啟動完整的 Spring 應用程式，等同檢查「能否連上資料庫，且 Entity 與資料表結構一致」。
-因此執行測試時同樣需要上表的 `DB_*` 環境變數，並會連到該資料庫。測試只讀取；唯一寫入的 `AppUserServiceDatabaseTests`
-在交易中執行並於結束時還原（rollback），不會留下資料。登入相關測試使用測試用的假 Google 用戶端，不連線 Google：
+因此執行測試時同樣需要上表的 `DB_*` 環境變數，並會連到該資料庫。會寫入的測試（使用者、庫存：`AppUserServiceDatabaseTests`、`HoldingServiceTests`、`HoldingApiTests`）
+都在交易中執行並於結束時還原（rollback），不會留下資料。`HoldingServiceTests` 以 SQL 直接重算分析數字並逐項比對。登入相關測試使用測試用的假 Google 用戶端，不連線 Google：
 
 - **IntelliJ**：測試的執行設定與 `StockApiJavaApplication` 是分開的，需在測試的 Run Configuration 另外填入 `DB_*` 環境變數，否則會出現 `Could not resolve placeholder 'DB_URL'`
 - **終端機**：設定環境變數後執行 `./mvnw test`

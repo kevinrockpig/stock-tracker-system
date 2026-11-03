@@ -82,9 +82,10 @@ class SecurityTests {
     void personalDataRequiresLogin() throws Exception {
         mvc.perform(get("/api/holdings")).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/holdings/1")).andExpect(status().isUnauthorized());
-        // 登入後通過存取控制（庫存 API 在下一步實作，目前為 404）
-        mvc.perform(get("/api/holdings").with(authentication(loggedIn(1, "me@example.com"))))
-                .andExpect(status().isNotFound());
+        // 登入後通過存取控制（使用者 1 沒有庫存）
+        mvc.perform(get("/api/holdings").with(authentication(loggedIn(-1, "me@example.com"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.count").value(0));
     }
 
     // 帶 token 的情形見 CsrfHttpTests（MockMvc 會替換 CSRF token 的儲存方式，需以實際 HTTP 測試）

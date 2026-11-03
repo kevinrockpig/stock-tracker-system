@@ -4,8 +4,10 @@ import com.ugi.stock.entity.StockPrice;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -36,4 +38,14 @@ public interface StockPriceRepository extends JpaRepository<StockPrice, Long> {
     // 市場最近的交易日（所有股票的不重複日期，由新到舊）；資料庫只存交易日，因此休市日不會出現
     @Query("select distinct p.tradeDate from StockPrice p order by p.tradeDate desc")
     List<LocalDate> findRecentTradeDates(Pageable pageable);
+
+    // 某日（含）以後最近一個交易日的行情（買進日不是交易日時往後找）
+    Optional<StockPrice> findFirstBySymbolAndTradeDateGreaterThanEqualOrderByTradeDateAsc(String symbol, LocalDate date);
+
+    // 資料庫中最早的一筆行情（判斷買進日是否早於資料起點）
+    Optional<StockPrice> findFirstBySymbolOrderByTradeDateAsc(String symbol);
+
+    // 日期區間（含頭尾）內的最高收盤價，供移動停利線使用
+    @Query("select max(p.closePrice) from StockPrice p where p.symbol = :symbol and p.tradeDate between :from and :to")
+    Optional<BigDecimal> findMaxClose(@Param("symbol") String symbol, @Param("from") LocalDate from, @Param("to") LocalDate to);
 }

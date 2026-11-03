@@ -12,4 +12,7 @@ public interface StrategySignalRepository extends JpaRepository<StrategySignal, 
 
     // 某策略在日期區間內（含頭尾）的所有訊號；使用 (strategy, trade_date) 索引
     List<StrategySignal> findByStrategyAndTradeDateBetween(String strategy, LocalDate from, LocalDate to);
+
+    // 某檔股票某個交易日符合的策略
+    List<StrategySignal> findBySymbolAndTradeDate(String symbol, LocalDate tradeDate);
 }

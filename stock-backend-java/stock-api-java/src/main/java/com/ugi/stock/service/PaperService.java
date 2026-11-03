@@ -39,10 +39,6 @@ import java.util.stream.Stream;
 @Transactional(readOnly = true)
 public class PaperService {
 
-    // 賣出成本：必須與 Python 端 scraper/backtest.py 的 SELL_FEE / SELL_TAX_* 一致
-    private static final BigDecimal SELL_FEE = new BigDecimal("0.001425");
-    private static final BigDecimal SELL_TAX_STOCK = new BigDecimal("0.003");
-    private static final BigDecimal SELL_TAX_ETF = new BigDecimal("0.001");
     private static final MathContext MC = MathContext.DECIMAL64;
 
     private final PaperAccountRepository accountRepository;
@@ -129,7 +125,8 @@ public class PaperService {
                 p.getSymbol(), account.getLastProcessed());
         BigDecimal close = price.map(StockPrice::getClosePrice).orElse(p.getEntryPrice());
         BigDecimal marketValue = p.getShares().multiply(close, MC);
-        BigDecimal sellCost = SELL_FEE.add(p.getSymbol().startsWith("00") ? SELL_TAX_ETF : SELL_TAX_STOCK);
+        // 與 Python 回測相同：賣出成本以比例計算（不捨入、無最低手續費）
+        BigDecimal sellCost = TradingCosts.FEE_RATE.add(TradingCosts.taxRate(p.getSymbol()));
         BigDecimal proceeds = marketValue.multiply(BigDecimal.ONE.subtract(sellCost), MC).add(p.getDividends());
 
         BigDecimal exitLine = null;
