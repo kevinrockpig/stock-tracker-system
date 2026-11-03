@@ -586,6 +586,13 @@ def upsert_actions(conn: Connection, rows: list[dict]) -> dict[str, int]:
     return _upsert(conn, stock_actions, rows, "uq_stock_actions_symbol_ex_date", ACTION_COLUMNS)
 
 
+def load_share_change_dates(conn: Connection, symbol: str) -> set:
+    """資料庫中這檔股票有股數變動（配股、減資、分割）的日期。"""
+    return set(conn.execute(
+        select(stock_actions.c.ex_date).where(stock_actions.c.symbol == symbol, stock_actions.c.split_ratio.is_not(None))
+    ).scalars())
+
+
 def get_history_from(conn: Connection, symbol: str):
     """資料庫中這檔股票完整歷史的起始設定；尚未補齊（或股票不存在）時為 None。"""
     return conn.execute(select(stocks.c.history_from).where(stocks.c.symbol == symbol)).scalar()

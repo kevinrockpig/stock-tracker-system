@@ -39,6 +39,7 @@ from scraper.db import (
     init_schema,
     load_closes,
     load_prices,
+    load_share_change_dates,
     load_strategy_inputs,
     mark_history_complete,
     overlap_start,
@@ -48,6 +49,7 @@ from scraper.db import (
     upsert_prices,
     upsert_stock,
 )
+from scraper.corrections import apply_share_corrections, corrections_for
 from scraper.fetcher import (
     READJUST_CHECK_DAYS,
     FetchError,
@@ -136,7 +138,11 @@ def run(force_full: bool = False) -> int:
                 upsert_stock(conn, symbol, name, currency, groups_of(symbol), listed)
                 removed = delete_placeholder_rows(conn, symbol)
                 counts = upsert_prices(conn, to_records(symbol, df))
-                action_counts = upsert_actions(conn, to_action_records(symbol, result.actions))
+                action_records = to_action_records(symbol, result.actions)
+                if corrections_for(symbol):  # Yahoo 漏掉的股本事件（corrections.py）
+                    action_records = apply_share_corrections(
+                        symbol, action_records, load_share_change_dates(conn, symbol))
+                action_counts = upsert_actions(conn, action_records)
                 if listed and (before := delete_before_listing(conn, symbol, listed)):
                     logger.info("[%s] 刪除上市（上櫃）日 %s 之前的日 K %d 筆", symbol, listed, before)
                 if full:
@@ -172,7 +178,7 @@ def run(force_full: bool = False) -> int:
         if action_counts["inserted"] or action_counts["updated"]:
             logger.info(
                 "[%s] 除權息事件 %d 筆 新增 %d / 更新 %d",
-                symbol, len(result.actions), action_counts["inserted"], action_counts["updated"],
+                symbol, len(action_records), action_counts["inserted"], action_counts["updated"],
             )
         last = indicators.iloc[-1]
         logger.info(

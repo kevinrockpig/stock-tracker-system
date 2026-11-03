@@ -286,3 +286,23 @@ WHERE r.swing_high <> s.hi OR r.swing_low <> s.lo
    OR r.close_price <> (SELECT close_price FROM stock_prices p WHERE p.symbol = r.symbol AND p.trade_date = r.basis_date)
    OR r.limit_up > r.reference_price * 1.1 OR r.limit_down < r.reference_price * 0.9
    OR r.limit_up < r.reference_price * 1.09 OR r.limit_down > r.reference_price * 0.91;
+
+-- 27. 停牌期間沒有股數變動紀錄：連續 3 個以上的市場交易日沒有日 K，通常是面額變更（分割）或減資換發新股，
+--     stock_actions 應有一筆 split_ratio。Yahoo 有時只換算價格、不提供事件（例如 0050 的 1 拆 4），
+--     查證後補在 scraper/corrections.py；應回傳 0 列
+WITH market AS (  -- 市場交易日：當天有 20 檔以上有日 K
+    SELECT trade_date, ROW_NUMBER() OVER (ORDER BY trade_date) AS n
+    FROM stock_prices GROUP BY trade_date HAVING COUNT(*) >= 20
+), gaps AS (
+    SELECT p.symbol, p.trade_date, m.n,
+           LAG(p.trade_date) OVER w AS prev_date, LAG(m.n) OVER w AS prev_n
+    FROM stock_prices p JOIN market m USING (trade_date)
+    WINDOW w AS (PARTITION BY p.symbol ORDER BY p.trade_date)
+)
+SELECT g.symbol, g.prev_date AS last_trade_before, g.trade_date AS resumed, g.n - g.prev_n - 1 AS missed_days
+FROM gaps g
+WHERE g.n - g.prev_n - 1 >= 3
+  AND NOT EXISTS (SELECT 1 FROM stock_actions a
+                  WHERE a.symbol = g.symbol AND a.split_ratio IS NOT NULL
+                    AND a.ex_date > g.prev_date AND a.ex_date <= g.trade_date)
+ORDER BY g.symbol, g.trade_date;
