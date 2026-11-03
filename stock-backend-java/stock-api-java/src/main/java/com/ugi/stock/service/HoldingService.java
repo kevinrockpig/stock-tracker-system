@@ -389,7 +389,7 @@ public class HoldingService {
         BigDecimal unrealizedPnl;
         BigDecimal atr14;
         BigDecimal ma60;
-        boolean historyComplete;
+        boolean historyComplete = true; // 只有買進日期早於資料起點時為 false（沒有買進日期時不適用）
         BigDecimal highestClose;
         BigDecimal exitLine;
         ReferenceLevel level;

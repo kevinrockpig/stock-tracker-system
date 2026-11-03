@@ -2,6 +2,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { fetchGroups, fetchStocks } from '../api/stocks.js'
+import { auth } from '../utils/auth.js'
+import AddHoldingButton from './AddHoldingButton.vue'
 import { formatChange, formatLots, formatPercent, formatPrice, trendClass } from '../utils/format.js'
 import { groupShortName, matchesQuery } from '../utils/groups.js'
 
@@ -153,6 +155,7 @@ function ariaSort(key) {
                   成交量（張）<span v-if="sortKey === 'volume'" aria-hidden="true"> ▼</span>
                 </button>
               </th>
+              <th v-if="auth.loginEnabled" class="col-add"><span class="visually-hidden">加入庫存</span></th>
             </tr>
           </thead>
           <tbody>
@@ -162,7 +165,9 @@ function ariaSort(key) {
               </td>
               <td>
                 <RouterLink :to="{ name: 'stock-detail', params: { symbol: stock.symbol } }">{{ stock.name }}</RouterLink>
-                <span class="code-mobile">{{ stock.symbol }}</span>
+                <span class="code-mobile"
+                  >{{ stock.symbol }} <AddHoldingButton v-if="auth.loginEnabled" :stock="stock" compact class="add-mobile"
+                /></span>
                 <span v-for="code in stock.groups" :key="code" class="tag">{{ groupShortName(code) }}</span>
                 <span v-if="stock.tradeDate && stock.tradeDate !== latestDate" class="stale">{{ stock.tradeDate }}</span>
               </td>
@@ -170,6 +175,7 @@ function ariaSort(key) {
               <td class="num col-change" :class="trendClass(stock.change)">{{ formatChange(stock.change) }}</td>
               <td class="num" :class="trendClass(stock.change)">{{ formatPercent(stock.changePercent) }}</td>
               <td class="num">{{ formatLots(stock.volume) }}</td>
+              <td v-if="auth.loginEnabled" class="col-add"><AddHoldingButton :stock="stock" compact /></td>
             </tr>
           </tbody>
         </table>
@@ -299,17 +305,39 @@ th {
   display: none;
 }
 
+.col-add {
+  width: 1%;
+  padding-left: 0;
+  text-align: right;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 /* 手機：代號移到名稱下方、隱藏漲跌金額，名稱到漲跌幅不用左右滑動就看得到 */
 @media (max-width: 640px) {
   th,
   td {
-    padding: 8px 6px;
+    padding: 8px 5px; /* 名稱格多了「＋」，每格少 1px 才不用左右滑動 */
     font-size: 14px;
   }
 
   .col-symbol,
-  .col-change {
+  .col-change,
+  .col-add {
     display: none;
+  }
+
+  .code-mobile .add-mobile {
+    margin-left: 4px;
+    padding: 0 4px;
+    font-size: 12px;
   }
 
   .code-mobile {

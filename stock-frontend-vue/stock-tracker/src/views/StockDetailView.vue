@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { fetchBacktests, fetchHistory, fetchLevels, fetchStocks, fetchTrades } from '../api/stocks.js'
+import AddHoldingButton from '../components/AddHoldingButton.vue'
 import CandlestickChart from '../components/CandlestickChart.vue'
 import { BACKTEST_RULES, EXIT_REASONS, verdict } from '../utils/backtest.js'
 import { CHART_RANGES, LEVEL_COLORS, MA_LINES, SUB_CHARTS, TRADE_COLORS, TRAILING_LINE_COLOR } from '../utils/chartConfig.js'
@@ -113,6 +114,7 @@ const backFrom = computed(() => {
   if (typeof back !== 'string') return null
   if (back.startsWith('/screener')) return { path: back, label: '返回策略選股' }
   if (back === '/' || back.startsWith('/?')) return { path: back, label: '返回股票清單' }
+  if (back.startsWith('/holdings')) return { path: back, label: '返回我的庫存' }
   return null
 })
 function goBack(event) {
@@ -245,6 +247,10 @@ const changePercent = computed(() => {
           <span class="price">{{ formatPrice(latest.closePrice) }}</span>
           <span :class="trendClass(change)">{{ formatChange(change) }}（{{ formatPercent(changePercent) }}）</span>
           <span class="meta">成交量 {{ formatLots(latest.volume) }} 張 · {{ latest.tradeDate }} 日收盤價</span>
+          <AddHoldingButton
+            class="add-holding-detail"
+            :stock="{ symbol: history.symbol, name: history.name, closePrice: latest.closePrice, tradeDate: latest.tradeDate }"
+          />
         </div>
       </header>
 
@@ -484,6 +490,11 @@ const changePercent = computed(() => {
   align-items: baseline;
   gap: 12px;
   margin-bottom: 16px;
+}
+
+.add-holding-detail {
+  align-self: center;
+  margin-left: auto;
 }
 
 .price {

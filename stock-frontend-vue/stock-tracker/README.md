@@ -8,6 +8,7 @@
 | 個股 K 線圖 | `/stocks/2330.TW?strategy=ma_bullish&exitRule=hold_5` | `GET /api/stocks/{symbol}/history?from=…`、`GET /api/stocks/{symbol}/levels`、`GET /api/backtests?scope={symbol}`、`GET /api/stocks/{symbol}/trades?strategy=…&exitRule=…` |
 | 策略選股 | `/screener?strategy=high_120&days=10&scope=TW50` | `GET /api/strategies`、`GET /api/screener?strategy=…&days=…`、`GET /api/stocks`、`GET /api/groups`、`GET /api/backtests?scope=…` |
 | 交易計畫（往後實測） | `/plan?account=high_120/trailing_nocap#plan-positions` | `GET /api/paper` |
+| 我的庫存（需登入） | `/holdings?sort=exit#holding-2330.TW` | `GET /api/me`、`GET/POST /api/holdings`、`PUT/DELETE /api/holdings/{id}`、`POST /api/logout` |
 | 回測比較（投資組合） | `/portfolio?scope=TW50&sort=cagr&strategy=high_120` | `GET /api/groups`、`GET /api/portfolio-backtests?scope=…` |
 | 使用說明 | `/about#backtest` | `GET /api/strategies`、`GET /api/backtests` |
 
@@ -38,6 +39,15 @@
 小於 5% 以橘色標示，下一個交易日要賣的加註）、資金曲線（`src/components/EquityChart.vue`，與兩個基準比較，ECharts 進入此頁才載入）、
 最近一次的執行結果與已出場交易。上方有段落連結；觀察中策略不只一個時以按鈕切換（網址 `account`）。
 
+我的庫存（`/holdings`）：使用 Google 登入（Java 處理，前端只導向 `/oauth2/authorization/google`），登入狀態在 `src/utils/auth.js`
+（App 載入時呼叫 `GET /api/me`）。股票清單每列的「＋」與個股頁的「加入庫存」開啟同一個表單（`src/components/HoldingDialog.vue`，全站一個，
+由 `openHoldingForm()` 開啟）：成交價（可帶入最新收盤）、買進日期（選填）、張數與零股、手續費（公定費率 / 折數 / 實際金額，附試算）。
+手續費方式、折數與最低手續費記在瀏覽器，下次自動帶入。未登入時按「加入庫存」會到庫存頁登入，登入回來後自動開啟該檔的表單
+（Java 一律導回 `/holdings`，要加入的代號暫存在 sessionStorage）。庫存頁：總覽卡片、需要留意（跌破移動停利線、即將除權息）、
+持股表（可依市值 / 距停利線 / 報酬排序，展開明細可修改、刪除每一筆）、與同期 0050 的比較、計算方式。
+寫入請求（新增、修改、刪除、登出）在 `X-XSRF-TOKEN` 標頭附上 `XSRF-TOKEN` cookie 的值（CSRF，`src/api/stocks.js`）。
+伺服器沒有設定 Google 登入時，「加入庫存」與導覽列的登入按鈕都不顯示。手機寬度時導覽列的「我的庫存」簡稱「庫存」，登入 / 登出在庫存頁。
+
 參考價位（個股頁，資料由 Python 每日收盤後計算）：價位表依價格由高到低列出漲跌停、60 日高低點、黃金分割、收盤價、ATR 停損，
 並顯示距收盤的百分比；有除權息預告時顯示提醒（下一個交易日除息時說明參考價已扣除股利）。
 K 線圖的「參考價位線」開關畫出漲跌停、黃金分割與 ATR 停損的水平線（設定記在瀏覽器）。轉換邏輯在 `src/utils/levels.js`。
@@ -52,10 +62,10 @@ K 線圖使用 ECharts（類別軸，只排列交易日；休市日不留空白�
 - 指標顏色與副圖設定集中在 `src/utils/chartConfig.js`
 - 區間、指標與參考價位線的選擇存在瀏覽器的 localStorage（`src/utils/chartSettings.js`），所有個股共用，重新整理後沿用；可按「恢復預設」
 
-使用說明頁（`/about`）：免責聲明、資料性質、指標計算方式與常見解讀、策略條件（取自 API）、回測方法與限制、參考價位的算法、資料來源。
+使用說明頁（`/about`）：免責聲明、資料性質、指標計算方式與常見解讀、策略條件（取自 API）、回測方法與限制、參考價位的算法、我的庫存的計算方式、資料來源。
 每頁頁尾有免責聲明連結；個股頁與策略選股頁的說明文字也連到對應段落（例如 `/about#indicators`）。
 
-導覽：導覽列固定在頂端（個股頁標示為「股票清單」底下）；個股頁的返回連結會回到來源頁（股票清單或策略選股，保留篩選條件與捲動位置）；說明頁目錄固定（桌面為左側欄、手機為導覽列下方橫列）並標示目前段落；捲動超過約一個畫面高時出現「回到頂端」按鈕；
+導覽：導覽列固定在頂端（個股頁標示為「股票清單」底下）；個股頁的返回連結會回到來源頁（股票清單、策略選股或我的庫存，保留篩選條件與捲動位置）；說明頁目錄固定（桌面為左側欄、手機為導覽列下方橫列）並標示目前段落；捲動超過約一個畫面高時出現「回到頂端」按鈕；
 上一頁會回到原本的捲動位置（`src/router.js` 的 `scrollBehavior`）。系統設定「減少動態效果」時不使用平滑捲動。
 
 ## 需求

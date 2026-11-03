@@ -36,6 +36,8 @@ export default createRouter({
     { path: '/portfolio', name: 'portfolio', component: () => import('./views/PortfolioView.vue') },
     // 交易計畫（往後實測的模擬帳戶），例如 /plan?account=high_120/trailing_nocap
     { path: '/plan', name: 'paper', component: () => import('./views/PaperView.vue') },
+    // 我的庫存（需要登入）；?add=代號 登入後開啟這一檔的新增表單，#holding-代號 捲到那一檔
+    { path: '/holdings', name: 'holdings', component: () => import('./views/HoldingsView.vue') },
     // 使用說明與免責聲明；各段落可用 #indicators 等錨點直接連結
     { path: '/about', name: 'about', component: AboutView },
     { path: '/:pathMatch(.*)*', redirect: '/' },

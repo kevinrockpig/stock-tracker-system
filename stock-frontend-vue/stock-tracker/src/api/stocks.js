@@ -13,13 +13,19 @@ export class ApiError extends Error {
   }
 }
 
-async function getJson(path) {
+// method / body 為寫入請求使用；回傳 fetch 的 Response（逾時、連線失敗轉成中文錯誤）
+async function request(path, { method = 'GET', body, headers = {} } = {}) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
-
-  let response
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, { signal: controller.signal })
+    return await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      signal: controller.signal,
+      // 同一個來源時瀏覽器預設就會帶 cookie；另外設定 VITE_API_BASE_URL（跨網域）時登入功能無法使用
+      credentials: 'same-origin',
+      headers: body === undefined ? headers : { 'Content-Type': 'application/json', ...headers },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
   } catch (err) {
     if (err.name === 'AbortError') {
       throw new Error(`API 超過 ${TIMEOUT_MS / 1000} 秒沒有回應`)
@@ -29,7 +35,9 @@ async function getJson(path) {
   } finally {
     clearTimeout(timer)
   }
+}
 
+async function parse(response) {
   if (!response.ok) {
     // Java 的錯誤回應為 Problem Details 格式，detail 欄位有中文說明
     let detail = ''
@@ -38,9 +46,32 @@ async function getJson(path) {
     } catch {
       // 回應不是 JSON 時改用通用訊息
     }
+    if (response.status === 401) detail = '尚未登入，或登入已逾時，請重新登入'
     throw new ApiError(response.status, detail || `API 回應錯誤（HTTP ${response.status}）`)
   }
-  return response.json()
+  return response.status === 204 ? null : response.json()
+}
+
+async function getJson(path) {
+  return parse(await request(path))
+}
+
+// 寫入請求要附上 CSRF token：Java 以 XSRF-TOKEN cookie 提供（GET /api/me 時寫入），前端放進 X-XSRF-TOKEN 標頭
+function csrfToken() {
+  const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]*)/)
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+async function send(method, path, body) {
+  if (!csrfToken()) await fetchMe()
+  const attempt = () => request(path, { method, body, headers: { 'X-XSRF-TOKEN': csrfToken() ?? '' } })
+  let response = await attempt()
+  // 403：token 已更換（例如在其他分頁登出再登入）→ 重新取得一次再試
+  if (response.status === 403) {
+    await fetchMe()
+    response = await attempt()
+  }
+  return parse(response)
 }
 
 // 股票清單 + 最新日收盤報價
@@ -97,4 +128,40 @@ export function fetchPortfolio(scope = 'ALL') {
 // 交易計畫與往後實測：每個觀察中策略一個模擬帳戶（下一個交易日的計畫、持股、已出場交易、每日資金與基準）
 export function fetchPaper() {
   return getJson('/api/paper')
+}
+
+// ---- 登入 ----
+
+// 目前的登入狀態：{ loginEnabled, authenticated, email, displayName, loginUrl }；同時取得寫入用的 CSRF token
+export function fetchMe() {
+  return getJson('/api/me')
+}
+
+// 開始 Google 登入（整頁跳轉到 Google，完成後由 Java 導回 /holdings）
+export function loginUrl(path) {
+  return `${API_BASE_URL}${path}`
+}
+
+export function logout() {
+  return send('POST', '/api/logout')
+}
+
+// ---- 庫存（需要登入，只會讀寫自己的資料）----
+
+// 庫存與分析：{ asOf, summary, benchmark, positions, count, maxCount, feeRules }
+export function fetchHoldings() {
+  return getJson('/api/holdings')
+}
+
+// body：{ symbol, buyDate, price, shares, feeMode, feeDiscount, minFee, fee }；回傳存好的一筆（含計算後的手續費）
+export function createHolding(body) {
+  return send('POST', '/api/holdings', body)
+}
+
+export function updateHolding(id, body) {
+  return send('PUT', `/api/holdings/${encodeURIComponent(id)}`, body)
+}
+
+export function deleteHolding(id) {
+  return send('DELETE', `/api/holdings/${encodeURIComponent(id)}`)
 }

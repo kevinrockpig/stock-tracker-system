@@ -259,6 +259,16 @@ class HoldingServiceTests {
     }
 
     @Test
+    void undatedPositionHasNoTrailingLine() {
+        service.create(alice, standard("2330.TW", null, "500", 1000));
+        Position p = service.getHoldings(alice).positions().get(0);
+        assertThat(p.trailingFrom()).isNull();
+        assertThat(p.exitLine()).isNull();
+        assertThat(p.historyComplete()).isTrue(); // 沒有買進日期：不是「早於資料起點」
+        assertThat(p.dividendsComplete()).isFalse();
+    }
+
+    @Test
     void emptyHoldings() {
         HoldingsResponse response = service.getHoldings(alice);
         assertThat(response.positions()).isEmpty();
