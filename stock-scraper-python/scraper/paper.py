@@ -272,10 +272,13 @@ def trading_days_after(stocks: dict[str, Stock], after: date) -> list[date]:
     return sorted({d for s in stocks.values() for d in s.bars.dates if d > after})
 
 
-def run_paper(engine, symbols) -> list[tuple[Account, list[DayResult]]]:
-    """處理每個觀察中策略從上次處理日之後的交易日；第一次執行時以最新交易日為啟用日。"""
+def run_paper(engine, symbols, preloaded: dict | None = None) -> list[tuple[Account, list[DayResult]]]:
+    """處理每個觀察中策略從上次處理日之後的交易日；第一次執行時以最新交易日為啟用日。
+
+    preloaded：symbol → 回測輸入（db.backtest_inputs），每日更新傳入已在記憶體中的資料，其餘從資料庫讀取。
+    """
     with engine.connect() as conn:
-        stocks = load_stocks(conn, symbols)
+        stocks = load_stocks(conn, symbols, preloaded)
     if not stocks:
         return []
     latest = max(d for s in stocks.values() for d in s.bars.dates)
@@ -293,7 +296,7 @@ def run_paper(engine, symbols) -> list[tuple[Account, list[DayResult]]]:
             # 持有中但已移出觀察名單的股票，仍需載入行情
             missing = [p.symbol for p in account.positions if p.symbol not in stocks]
             if missing:
-                stocks.update(load_stocks(conn, missing))
+                stocks.update(load_stocks(conn, missing, preloaded))
         last_close = {}
         for symbol, stock in stocks.items():
             known = [i for d, i in stock.index_of.items() if d <= account.last_processed]

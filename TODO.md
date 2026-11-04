@@ -10,7 +10,10 @@
 3. [ ] Python 每日更新改由私人 repo 的 GitHub Actions 執行（與 Mac 排程並行一週再停用 Mac）
    - [x] 設定檔 `stock-scraper-python/deploy/data-archive-repo/.github/workflows/market-daily.yml`（2026-11-03）：
      週一到週五 15:40、18:10（備援），`scraper.main` → `scraper.health`，結果寫在執行頁面的 Summary
-   - [ ] 使用者：push 公開 repo（Actions 取出的是 GitHub 上 main 的程式碼）、把設定檔複製到私人 repo、手動執行一次確認
+   - [x] 使用者：push 公開 repo、把設定檔複製到私人 repo（2026-11-04，私人 repo commit 72e07e1）
+   - [x] 使用者：Actions 手動執行一次（2026-11-04 10:24）
+   - [x] 降低 Neon 網路傳輸量（2026-11-04）：每檔完整日 K 只讀一次、各步驟共用（一次約 74 MB → 18 MB，結果比對完全相同）；
+     18:10 備援加 `--skip-if-current`，今天已完整更新就直接結束。需要再把新的 `market-daily.yml` 複製到私人 repo
    - [ ] 並行一週（約到 2026-11-10）：每天確認 Actions 成功、Yahoo 沒有擋連線，之後 `./scripts/install_schedule.sh uninstall` 停用 Mac 排程
 4. [ ] 部署網站（主機待定，見下方）：環境變數、Google 登入的轉回網址、`SESSION_COOKIE_SECURE`、`FRONTEND_URL`、手機實測
    - 部署前 Neon 需先有 `spring_session` 資料表（執行一次 `python -m scraper.main` 或等每日排程）

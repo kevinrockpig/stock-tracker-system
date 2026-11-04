@@ -225,10 +225,12 @@ def evaluate(stocks: dict[str, Stock], strategy: str, code: str, split_date: dat
     }
 
 
-def load_stocks(conn, symbols) -> dict[str, Stock]:
+def load_stocks(conn, symbols, preloaded: dict | None = None) -> dict[str, Stock]:
+    """preloaded：symbol → 回測輸入（db.backtest_inputs），有的就不再從資料庫讀取。"""
+    preloaded = preloaded or {}
     stocks = {}
     for symbol in symbols:
-        frame, signals, dividends = load_backtest_inputs(conn, symbol)
+        frame, signals, dividends = preloaded.get(symbol) or load_backtest_inputs(conn, symbol)
         if frame.empty:
             continue
         bars = make_bars(symbol, frame, dividends)
@@ -241,9 +243,9 @@ def load_stocks(conn, symbols) -> dict[str, Stock]:
     return stocks
 
 
-def run_portfolio(engine, symbols, split_date: date) -> list[dict]:
+def run_portfolio(engine, symbols, split_date: date, preloaded: dict | None = None) -> list[dict]:
     with engine.connect() as conn:
-        stocks = load_stocks(conn, symbols)
+        stocks = load_stocks(conn, symbols, preloaded)
     scopes = {ALL_SCOPE: list(stocks)}
     for group_code, group in STOCK_GROUPS.items():
         members = [s for s in group["stocks"] if s in stocks]

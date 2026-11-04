@@ -582,6 +582,18 @@ def delete_before_listing(conn: Connection, symbol: str, listed_date) -> int:
     return result.rowcount
 
 
+def current_symbols(conn: Connection, symbols, day) -> tuple[set, set]:
+    """symbols 中已有 day 的日 K、已有以 day 為基準的參考價位的股票（每日更新的備援執行判斷是否已完成）。"""
+    symbols = list(symbols)
+    priced = set(conn.execute(
+        select(stock_prices.c.symbol).where(stock_prices.c.trade_date == day, stock_prices.c.symbol.in_(symbols))
+    ).scalars())
+    leveled = set(conn.execute(
+        select(reference_levels.c.symbol).where(reference_levels.c.basis_date == day, reference_levels.c.symbol.in_(symbols))
+    ).scalars())
+    return priced, leveled
+
+
 def load_held_stocks(conn: Connection) -> dict[str, str]:
     """庫存中的股票（代號 → 名稱），每日更新時與觀察名單一起抓取。只讀股票代號，不讀使用者與買進內容。"""
     held = select(holdings.c.symbol).distinct().scalar_subquery()
@@ -687,37 +699,28 @@ def database_size_bytes(conn: Connection) -> int:
 
 
 def load_prices(conn: Connection, symbol: str) -> pd.DataFrame:
-    """讀出資料庫中某檔股票的全部日 K（依日期由舊到新），作為指標計算的輸入。"""
-    stmt = (
-        select(stock_prices.c.trade_date, stock_prices.c.high_price, stock_prices.c.low_price, stock_prices.c.close_price)
-        .where(stock_prices.c.symbol == symbol)
-        .order_by(stock_prices.c.trade_date)
-    )
-    return pd.DataFrame(conn.execute(stmt).mappings().all())
-
-
-def load_strategy_inputs(conn: Connection, symbol: str) -> pd.DataFrame:
-    """策略掃描的輸入：收盤價 + 均線 + MACD（依日期由舊到新）。"""
+    """讀出資料庫中某檔股票的全部日 K（依日期由舊到新），作為指標計算的輸入；開盤價供回測使用。"""
     stmt = (
         select(
-            stock_prices.c.trade_date,
-            stock_prices.c.close_price,
-            stock_indicators.c.ma5,
-            stock_indicators.c.ma10,
-            stock_indicators.c.ma20,
-            stock_indicators.c.ma60,
-            stock_indicators.c.macd_dif,
-            stock_indicators.c.macd_signal,
-        )
-        .join(
-            stock_indicators,
-            (stock_indicators.c.symbol == stock_prices.c.symbol)
-            & (stock_indicators.c.trade_date == stock_prices.c.trade_date),
+            stock_prices.c.trade_date, stock_prices.c.open_price, stock_prices.c.high_price,
+            stock_prices.c.low_price, stock_prices.c.close_price,
         )
         .where(stock_prices.c.symbol == symbol)
         .order_by(stock_prices.c.trade_date)
     )
     return pd.DataFrame(conn.execute(stmt).mappings().all())
+
+
+def stored_frame(prices: pd.DataFrame, indicator_records: list[dict]) -> pd.DataFrame:
+    """日 K（load_prices）＋剛寫入的指標，內容與寫入後再從資料庫讀回相同（指標為寫入的 Decimal，暖身期為 None）。
+
+    每日更新用來取代重複讀取（原本策略掃描另外讀一次，回測、投資組合、交易計畫各呼叫一次 load_backtest_inputs）：Neon 免費方案每月網路傳輸 5 GB，
+    同一份完整歷史在指標、策略、回測、投資組合、交易計畫各讀一次，一次更新約 74 MB（2026-11-04 實測）。
+    """
+    indicators = pd.DataFrame(indicator_records).drop(columns=["symbol"])
+    if not prices["trade_date"].tolist() == indicators["trade_date"].tolist():
+        raise ValueError("指標與日 K 的日期不一致")
+    return pd.concat([prices.reset_index(drop=True), indicators.drop(columns=["trade_date"])], axis=1)
 
 
 def sync_signals(conn: Connection, symbol: str, signals: set[tuple]) -> dict[str, int]:
@@ -764,15 +767,29 @@ def load_backtest_inputs(conn: Connection, symbol: str) -> tuple[pd.DataFrame, d
     signals = {}
     for row in conn.execute(select(strategy_signals.c.strategy, strategy_signals.c.trade_date).where(strategy_signals.c.symbol == symbol)):
         signals.setdefault(row.strategy, set()).add(row.trade_date)
+    return frame, signals, load_dividends(conn, symbol)
 
-    dividends = {
+
+BACKTEST_COLUMNS = ("trade_date", "open_price", "close_price", "atr14", "ma60", "macd_signal")
+
+
+def backtest_inputs(stored: pd.DataFrame, signal_set: set[tuple], dividends: dict) -> tuple[pd.DataFrame, dict, dict]:
+    """與 load_backtest_inputs 相同格式的回測輸入，由每日更新已在記憶體中的資料組成（不再讀資料庫）。"""
+    signals = {}
+    for trade_date, strategy in signal_set:
+        signals.setdefault(strategy, set()).add(trade_date)
+    return stored[list(BACKTEST_COLUMNS)], signals, dividends
+
+
+def load_dividends(conn: Connection, symbol: str) -> dict:
+    """除息日 → 每股現金股利。"""
+    return {
         row.ex_date: row.cash_dividend
         for row in conn.execute(
             select(stock_actions.c.ex_date, stock_actions.c.cash_dividend)
             .where(stock_actions.c.symbol == symbol, stock_actions.c.cash_dividend.is_not(None))
         )
     }
-    return frame, signals, dividends
 
 
 def sync_backtest_trades(conn: Connection, symbol: str, rows: list[dict]) -> dict[str, int]:

@@ -165,7 +165,7 @@ CHECKS = (
         "多半是分割或減資但 Yahoo 沒有提供事件；查證後補在 scraper/corrections.py",
     ),
     Check(
-        "資料庫用量超過 Neon 免費額度的 80%",
+        "資料庫大小超過 Neon 免費 1 GB 的 80%",
         f"""
         SELECT pg_size_pretty(pg_database_size(current_database())) AS database_size
         WHERE pg_database_size(current_database()) > {int(DATABASE_LIMIT_BYTES * DATABASE_WARN_RATIO)}
@@ -198,12 +198,13 @@ def _fmt_row(row: dict) -> str:
 def log_results(results: list[CheckResult]) -> int:
     """寫入 log，回傳有異常的項目數。"""
     failed = [r for r in results if r.rows]
+    # 每項的名稱描述的是「異常的情況」，所以正常時寫「沒有」，例如「✓ 沒有：開高低收不合理」
     for r in results:
         known = f"（已知例外 {r.known} 筆不計）" if r.known else ""
         if not r.rows:
-            logger.info("  正常：%s%s", r.check.title, known)
+            logger.info("  ✓ 沒有：%s%s", r.check.title, known)
             continue
-        logger.warning("  異常：%s %d 筆%s；%s", r.check.title, len(r.rows), known, r.check.hint)
+        logger.warning("  ✗ 發現 %d 筆：%s%s；%s", len(r.rows), r.check.title, known, r.check.hint)
         for row in r.rows[:SAMPLE_ROWS]:
             logger.warning("    %s", _fmt_row(row))
         if len(r.rows) > SAMPLE_ROWS:
@@ -226,6 +227,8 @@ def run() -> int:
     try:
         with engine.connect() as conn:
             results = run_checks(conn)
+            size = conn.execute(text("SELECT pg_database_size(current_database())")).scalar()
+        logger.info("資料庫大小 %.0f MB（Neon 免費 1 GB 的 %.0f%%）", size / 1024 ** 2, size / DATABASE_LIMIT_BYTES * 100)
     except SQLAlchemyError as exc:
         logger.error("資料檢查無法執行：%s", getattr(exc, "orig", exc))
         return 3

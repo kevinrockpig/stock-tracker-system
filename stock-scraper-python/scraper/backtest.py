@@ -604,12 +604,16 @@ def to_stat_records(rows: list[dict]) -> list[dict]:
     return records
 
 
-def run_backtest(engine, symbols) -> list[dict]:
-    """回測 symbols 並寫入資料庫，回傳統計列（供 log 摘要）。所有寫入在同一個交易中完成。"""
+def run_backtest(engine, symbols, preloaded: dict | None = None) -> list[dict]:
+    """回測 symbols 並寫入資料庫，回傳統計列（供 log 摘要）。所有寫入在同一個交易中完成。
+
+    preloaded：symbol → 回測輸入（db.backtest_inputs），每日更新傳入已在記憶體中的資料，其餘從資料庫讀取。
+    """
+    preloaded = preloaded or {}
     with engine.begin() as conn:
         results = {}
         for symbol in symbols:
-            frame, signals, dividends = load_backtest_inputs(conn, symbol)
+            frame, signals, dividends = preloaded.get(symbol) or load_backtest_inputs(conn, symbol)
             if frame.empty:
                 continue
             results[symbol] = backtest_symbol(symbol, frame, signals, dividends)

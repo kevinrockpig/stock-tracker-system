@@ -13,7 +13,9 @@ on:
   schedule:
     # GitHub 的排程時間是 UTC，以下換算為台灣時間（UTC+8），週一到週五（休市日執行不會出錯，結果維持前一個交易日）。
     # Mac 排程 15:00 開始、約 15:10 結束（2026-11 實測主程式約 6 分鐘）；並行期間錯開，避免兩邊同時寫入交易計畫。
-    # 排程可能延遲或偶爾被略過，所以排兩次，第二次作為備援（重複執行只會更新、不會產生重複資料）。
+    # 排程可能延遲或偶爾被略過，所以排兩次，第二次作為備援：今天已完整更新過就直接結束（--skip-if-current），
+    # 有任何一檔缺少今天的資料時才重新執行，節省 Neon 的網路傳輸量（免費每月 5 GB）與運算時數。
+    # 修改備援的時間時，下方「更新行情」步驟中比對的字串也要一起改。
     - cron: "40 7 * * 1-5"   # 台灣時間 15:40
     - cron: "10 10 * * 1-5"  # 台灣時間 18:10（備援）
   workflow_dispatch:           # Actions 頁面的「Run workflow」按鈕，可隨時手動執行
@@ -56,7 +58,10 @@ jobs:
 
       - name: 更新行情、指標、策略、回測、交易計畫與參考價位
         working-directory: code/stock-scraper-python
-        run: python -m scraper.main
+        env:
+          # 只有備援排程加上 --skip-if-current；手動執行（Run workflow）與 15:40 一律完整執行
+          EXTRA_ARGS: ${{ github.event.schedule == '10 10 * * 1-5' && '--skip-if-current' || '' }}
+        run: python -m scraper.main $EXTRA_ARGS
 
       # 上一步部分股票失敗時仍會執行，檢查已寫入的資料；結果同時寫進執行頁面的 Summary
       - name: 資料健康檢查

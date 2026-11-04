@@ -35,8 +35,11 @@ archive/<來源>/<年>/<日期>.csv.gz
   確認 Yahoo 不會擋 GitHub 的連線、每天都成功後，再在 Mac 執行 `./scripts/install_schedule.sh uninstall` 停用
 - 失敗或資料健康檢查發現異常時，GitHub 寄信通知；檢查結果顯示在該次執行頁面的 Summary
 - 手動執行：Actions → 行情每日更新 → Run workflow
-- 用量：每次約 10 分鐘（Mac 實測主程式約 6 分鐘，另加安裝套件），一天兩次約 440 分鐘 / 月，
-  加上官方資料累積，在 GitHub Free 私人 repo 每月 2,000 分鐘的額度內
+- 18:10 的備援先檢查：今天每檔都已有日 K 與參考價位（15:40 已成功）就直接結束；有任何一檔缺資料才重新執行
+- 用量：
+  - GitHub Actions：完整執行約 10 分鐘（含安裝套件），備援略過時約 1 分鐘，每月約 250 分鐘，
+    加上官方資料累積，在 GitHub Free 私人 repo 每月 2,000 分鐘的額度內
+  - Neon 網路傳輸（免費每月 5 GB）：完整執行一次約從資料庫讀出 18 MB（2026-11-04 實測），每月約 0.4 GB
 
 ### 官方資料每日累積（official-daily.yml）
 

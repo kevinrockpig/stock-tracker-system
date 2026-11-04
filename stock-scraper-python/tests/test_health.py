@@ -80,3 +80,12 @@ def test_tracked_stocks_adds_held_stocks_after_watchlist():
 def test_tracked_stocks_without_holdings():
     watchlist = {"2330.TW": "台積電"}
     assert tracked_stocks(watchlist, {}) == watchlist
+
+
+def test_already_current_requires_prices_and_levels_for_every_symbol():
+    from scraper.main import already_current
+    targets = {"2330.TW": "台積電", "0050.TW": "元大台灣50"}
+    both = {"2330.TW", "0050.TW"}
+    assert already_current(targets, both, both)
+    assert not already_current(targets, {"2330.TW"}, both)  # Yahoo 漏了 0050 今天的日 K → 照常重抓
+    assert not already_current(targets, both, {"2330.TW"})  # 參考價位（最後一步）沒完成 → 照常執行

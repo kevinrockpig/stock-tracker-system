@@ -27,6 +27,7 @@ cp .env.example .env              # 再填入實際的 DB_URL / DB_USERNAME / DB
 ```bash
 python -m scraper.main                 # 增量抓日 K（OHLCV），並計算技術指標、掃描策略
 python -m scraper.main --full          # 強制重抓 2015-06-01 起的完整歷史（平常不需要）
+python -m scraper.main --skip-if-current   # 今天已完整更新過就直接結束（雲端排程的備援執行使用）
 python -m scraper.health               # 資料健康檢查（唯讀），見「驗證」
 ```
 
@@ -44,6 +45,10 @@ python -m scraper.health               # 資料健康檢查（唯讀），見「
 
 **增量抓取**：資料存在自己的資料庫，每次只從資料庫最新的日期接著抓，並往前重疊 10 個交易日（`config.OVERLAP_TRADING_DAYS`），
 用來接收 Yahoo 對最近幾天的修正，以及偵測下面的價格重新調整。電腦關機多久，下次執行就從那裡接著補。
+
+**資料庫讀取量**：Neon 免費方案每月網路傳輸 5 GB。每檔股票的完整日 K 只讀一次：指標算完寫入後，
+策略掃描、回測、投資組合回測、交易計畫都使用記憶體中的同一份資料（`db.stored_frame`，與寫入後讀回的內容相同）。
+一次更新從資料庫讀出約 18 MB（原本各步驟各讀一次約 74 MB，2026-11-04 實測；改寫前後以同一份 Yahoo 資料執行，20 張資料表的結果完全相同）。
 
 **完整歷史（回測用）**：資料庫保存 2015-06-01（`config.HISTORY_START`，台股漲跌幅自這天起放寬為 10%）起的日 K。
 以下情況會自動改抓完整歷史，不需要手動處理：
@@ -91,7 +96,8 @@ psql "host=<host> dbname=<db> user=<user> sslmode=require" -f sql/verify.sql
 
 **每日資料健康檢查**（`python -m scraper.health`，每日更新的第 3 步）：以唯讀連線執行上面與資料來源有關、執行快速的檢查，
 加上「yfinance 最新交易日是否落後當天的官方資料」與「觀察名單或庫存中的股票是否缺少最新交易日」，
-異常時在 log 列出前 5 筆並以 exit code 1 結束。共 10 項：
+每項的名稱描述的是「異常的情況」：沒有發現時 log 為「✓ 沒有：…」，發現時為「✗ 發現 N 筆：…」並列出前 5 筆，
+以 exit code 1 結束；最後另外列出資料庫大小。共 10 項：
 
 | 檢查 | 對應 |
 |---|---|
@@ -100,7 +106,7 @@ psql "host=<host> dbname=<db> user=<user> sslmode=require" -f sql/verify.sql
 | 休市日補值、開高低收不合理、指標與日 K 筆數不一致、RSI / KD 超出範圍、暖身期之後仍為 NULL 的指標 | 查詢 6、7、9、11、12 |
 | 單日漲跌超過 10%（已知例外寫在 `scraper/health.py`） | 查詢 23 |
 | 停牌期間沒有股數變動紀錄 | 查詢 27 |
-| 資料庫用量超過 Neon 免費額度的 80% | 查詢 20 |
+| 資料庫大小超過 Neon 免費 1 GB 的 80%（儲存空間，與運算時數、網路傳輸量無關） | 查詢 20 |
 
 回測與參考價位的獨立驗算（查詢 15、24～26）較耗時，且只在修改計算程式時才可能出錯，不放進每日檢查，修改後手動執行。
 
@@ -302,6 +308,7 @@ GitHub Actions 每天自動執行，不依賴這台電腦開機。設定檔與�
 - 私人 repo 取出這個公開 repo 的程式碼執行，資料庫連線資訊放在私人 repo 的 Secrets，CSV 備份 commit 回私人 repo
 - 官方資料在隔天早上抓前一個交易日：實測櫃買中心約晚上 11 點半、證交所 OpenAPI 約隔天清晨 5 點才更新，
   證交所 CSV 則在隔天下午 2 點左右換成下一天
+- `market-daily.yml` 的 18:10 備援加上 `--skip-if-current`：今天每檔都已有日 K 與參考價位就直接結束，有任何一檔缺資料才重新執行
 - `market-daily.yml` 取代 Mac 的每日排程：先與 Mac 並行一週（時間錯開 40 分鐘），確認 Yahoo 不會擋 GitHub 的連線後，
   執行 `./scripts/install_schedule.sh uninstall` 停用 Mac 排程；一鍵更新仍可隨時手動使用。
   同一天重複執行不會重複交易（交易計畫只處理「上次處理日之後」的交易日；兩邊剛好同時寫入同一天時，後寫入的會因唯一鍵失敗並還原）
