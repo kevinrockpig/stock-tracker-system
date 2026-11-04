@@ -19,6 +19,7 @@
   app_users         使用者，一人一筆
   user_identities   登入方式（目前為 Google；日後可加自設密碼），同一使用者可有多種
   holdings          使用者自行填寫的庫存，一筆為一次買進
+  notification_settings  通知設定（每位使用者一筆）；holding_risk_levels 個股風險設定；notification_log 發送紀錄
   spring_session / spring_session_attributes
                     登入狀態（Java 的 Spring Session JDBC 讀寫；主機重新啟動或部署後不會被登出），
                     結構與 spring-session-jdbc 官方的 schema-postgresql.sql 相同
@@ -487,6 +488,55 @@ holdings = Table(
         name="ck_holdings_fee_discount",
     ),
     Index("ix_holdings_user", "user_id"),
+)
+
+# 每日通知（Java 計算並發送，見 stock-api-java 的 NotificationService）。
+# 通知設定：每位使用者一筆，沒有資料時視為未開啟；Email 寄到登入的 Google email
+NOTIFICATION_RISK_LEVELS = ("conservative", "standard", "aggressive")
+NOTIFICATION_CHANNELS = ("email", "line")
+notification_settings = Table(
+    "notification_settings",
+    metadata,
+    Column("user_id", BigInteger, ForeignKey("app_users.id", ondelete="CASCADE"), primary_key=True),
+    Column("email_enabled", Boolean, nullable=False, server_default=text("false")),
+    Column("ex_dividend_days", Integer, nullable=False, server_default=text("3")),  # 幾天內除權息要提醒
+    Column("entry_alerts", Boolean, nullable=False, server_default=text("true")),  # 是否附上交易計畫的買進候選
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    CheckConstraint("ex_dividend_days BETWEEN 0 AND 30", name="ck_notification_settings_ex_days"),
+)
+
+# 個股風險設定：「接近停利線」的提醒距離，保守 1.5 ATR、標準 1 ATR、積極 0.5 ATR；沒有資料的股票為標準
+holding_risk_levels = Table(
+    "holding_risk_levels",
+    metadata,
+    Column("user_id", BigInteger, ForeignKey("app_users.id", ondelete="CASCADE"), primary_key=True),
+    Column("symbol", String(20), ForeignKey("stocks.symbol"), primary_key=True),
+    Column("risk_level", String(12), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    CheckConstraint(
+        "risk_level IN (" + ", ".join(f"'{level}'" for level in NOTIFICATION_RISK_LEVELS) + ")",
+        name="ck_holding_risk_levels_level",
+    ),
+)
+
+# 發送紀錄：每位使用者、每個提醒依據的交易日、每個管道一筆。已成功的不再重送（備援重跑、休市日執行），
+# 失敗的下次執行重試並更新這一筆
+notification_log = Table(
+    "notification_log",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False),
+    Column("basis_date", Date, nullable=False),
+    Column("channel", String(10), nullable=False),
+    Column("status", String(10), nullable=False),
+    Column("alert_count", Integer, nullable=False),
+    Column("error", String(500)),
+    Column("sent_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("user_id", "basis_date", "channel", name="uq_notification_log_key"),
+    CheckConstraint(
+        "channel IN (" + ", ".join(f"'{c}'" for c in NOTIFICATION_CHANNELS) + ")", name="ck_notification_log_channel",
+    ),
+    CheckConstraint("status IN ('sent', 'failed')", name="ck_notification_log_status"),
 )
 
 # 登入狀態（Spring Session JDBC）：欄位、索引名稱與官方 schema-postgresql.sql 相同（Java 以不加引號的大寫名稱查詢，

@@ -34,6 +34,7 @@ archive/<來源>/<年>/<日期>.csv.gz
 - 取代 Mac 的每日排程：電腦關機也會更新。剛啟用時與 Mac 並行一週（Mac 15:00、這裡 15:40，時間錯開），
   確認 Yahoo 不會擋 GitHub 的連線、每天都成功後，再在 Mac 執行 `./scripts/install_schedule.sh uninstall` 停用
 - 失敗或資料健康檢查發現異常時，GitHub 寄信通知；檢查結果顯示在該次執行頁面的 Summary
+- 最後寄出每日通知（設定了 `MAIL_USERNAME` 才執行）：每個交易日每人一封，重跑不會重寄
 - 手動執行：Actions → 行情每日更新 → Run workflow
 - 18:10 的備援先檢查：今天每檔都已有日 K 與參考價位（15:40 已成功）就直接結束；有任何一檔缺資料才重新執行
 - 用量：
@@ -58,3 +59,7 @@ Settings → Secrets and variables → Actions → Repository secrets：
 | `DB_URL` | 與本機 `.env` 相同，例如 `jdbc:postgresql://<host>/<db>?sslmode=require` |
 | `DB_USERNAME` | 資料庫帳號 |
 | `DB_PASSWORD` | 資料庫密碼（重設 Neon 密碼後要同步更新這裡） |
+| `MAIL_USERNAME` | 寄出每日通知的 Gmail 帳號（market-daily.yml；沒有設定時略過通知） |
+| `MAIL_PASSWORD` | 該 Gmail 帳號的「應用程式密碼」（16 碼，需先開啟兩步驟驗證；變更 Google 密碼後會失效，要重新建立） |
+
+選填的 Variables（同一頁的 Variables 分頁）：`SITE_URL`，網站網址，信中附上通知設定的連結（網站上線後再設定）。

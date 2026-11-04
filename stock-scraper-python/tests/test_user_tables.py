@@ -69,3 +69,14 @@ def test_spring_session_tables_match_official_schema():
     assert attributes.primary_key.name == "spring_session_attributes_pk"
     fk = next(iter(attributes.c.session_primary_id.foreign_keys))
     assert fk.column is session.c.primary_id and fk.ondelete == "CASCADE"
+
+
+def test_notification_tables():
+    # 使用者刪除時一併刪除通知設定、個股風險設定與發送紀錄
+    for table in (db.notification_settings, db.holding_risk_levels, db.notification_log):
+        fk = next(iter(table.c.user_id.foreign_keys))
+        assert fk.column is db.app_users.c.id and fk.ondelete == "CASCADE"
+    assert [c.name for c in db.holding_risk_levels.primary_key.columns] == ["user_id", "symbol"]
+    assert ("user_id", "basis_date", "channel") in _unique_columns(db.notification_log)
+    checks = _checks(db.holding_risk_levels)
+    assert all(level in checks["ck_holding_risk_levels_level"] for level in ("conservative", "standard", "aggressive"))

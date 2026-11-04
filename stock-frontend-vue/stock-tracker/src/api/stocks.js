@@ -165,3 +165,25 @@ export function updateHolding(id, body) {
 export function deleteHolding(id) {
   return send('DELETE', `/api/holdings/${encodeURIComponent(id)}`)
 }
+
+// ---- 每日通知（需要登入）----
+
+// { emailEnabled, exDividendDays, maxExDividendDays, entryAlerts, email, riskLevels: { 代號: 代碼 }, riskOptions, weakMarketExtra }
+export function fetchNotificationSettings() {
+  return getJson('/api/notifications/settings')
+}
+
+// body：{ emailEnabled, exDividendDays, entryAlerts }；回傳更新後的設定
+export function updateNotificationSettings(body) {
+  return send('PUT', '/api/notifications/settings', body)
+}
+
+// riskLevel：conservative / standard / aggressive；只能設定自己持有的股票
+export function setRiskLevel(symbol, riskLevel) {
+  return send('PUT', `/api/notifications/risk-levels/${encodeURIComponent(symbol)}`, { riskLevel })
+}
+
+// 依目前設定與最新收盤資料產生的通知內容（與每日寄出的 Email 相同，不會寄出）：{ asOf, subject, body, alertCount }
+export function fetchNotificationPreview() {
+  return getJson('/api/notifications/preview')
+}

@@ -26,6 +26,10 @@ Spring Boot RESTful API：從 PostgreSQL（Neon）讀取 Python 服務寫入的�
 | `FRONTEND_URL` | 否 | 登入成功 / 失敗後轉回的前端網址，預設 `http://localhost:5173`；部署後設為網站網址或空白（轉回同一個網址） |
 | `SESSION_COOKIE_SECURE` | 否 | 正式環境（HTTPS）設為 `true`，登入 cookie 只經由 HTTPS 傳送；預設 `false` |
 | `RATE_LIMIT_PER_MINUTE` | 否 | 每個 IP 每分鐘最多請求數（含網頁檔案），超過回 429；預設 `200`，`0` 表示不限制 |
+| `MAIL_USERNAME` | 否（每日通知時必填） | 寄出每日通知的 Gmail 帳號；未設定時通知模式不寄信 |
+| `MAIL_PASSWORD` | 否（每日通知時必填） | 該 Gmail 帳號的「應用程式密碼」（需先開啟兩步驟驗證），不是登入密碼 |
+| `SITE_URL` | 否 | 網站網址，信中附上通知設定的連結；尚未部署時空白 |
+| `MAIL_HOST`、`MAIL_PORT`、`MAIL_FROM_NAME` | 否 | 預設 `smtp.gmail.com`、`587`、「股票追蹤系統」 |
 
 `application.properties` 只有 `${DB_URL}` 這類佔位符，真實值只放在 IntelliJ 的 Run Configuration 或系統環境變數，不寫進任何檔案。
 
@@ -54,6 +58,19 @@ Spring Boot RESTful API：從 PostgreSQL（Neon）讀取 Python 服務寫入的�
 - 賣出成本：手續費依該檔最近一筆的方式（`actual` 以公定費率、最低 20 元估算）＋證交稅（股票 0.3%、ETF 0.1%）
 - 移動停利線：最早買進日以來的最高收盤價 − 3 × 最新 ATR(14)，與模擬帳戶相同
 - 同期比較：每筆有日期的買進，假設同一天（非交易日為下一個交易日）以同樣成本在收盤買 0050，含股利、不計交易成本
+
+## 每日通知（Email）
+
+每日更新後由 GitHub Actions 以「通知模式」執行一次（`java -jar … --app.notify.run-once=true --server.port=0`），
+寄完就結束；網站本身不寄信。設定檔見 `stock-scraper-python/deploy/data-archive-repo/.github/workflows/market-daily.yml`。
+
+- 收件人：在我的庫存頁開啟 Email 通知的使用者，寄到登入的 Google email；每個交易日一封，沒有提醒時也寄（「今日無提醒」）
+- 內容（`NotificationService`，數字與我的庫存、交易計畫相同）：大盤（0050 收盤與季線）、跌破移動停利線、
+  接近移動停利線（距離停利線幾個 ATR 以內，依個股風險設定：保守 1.5、標準 1、積極 0.5；0050 收盤低於季線時各加 0.5）、
+  幾天內除權息（預設 3 天）、交易計畫下一個交易日的買進候選（只寫「符合條件」，不是建議）
+- 每個交易日只寄一次（`notification_log`）：備援重跑或休市日執行時，依據的交易日沒有變，不會重寄；寄送失敗的下次執行重試
+- `--app.notify.dry-run=true`：只把內容寫進 log，不寄出、不記錄（檢查內容用）
+- Gmail 個人帳號每天最多寄 500 封，超過時暫停 1～24 小時（Google 說明）；每人每天一封遠低於上限
 
 ## 執行
 

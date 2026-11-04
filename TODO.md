@@ -18,7 +18,11 @@
 4. [ ] 部署網站（主機待定，見下方）：環境變數、Google 登入的轉回網址、`SESSION_COOKIE_SECURE`、`FRONTEND_URL`、手機實測
    - 部署前 Neon 需先有 `spring_session` 資料表（執行一次 `python -m scraper.main` 或等每日排程）
    - 確認平台代理附上的使用者 IP 能被辨識（否則請求頻率限制變成全站共用），以及 Google 登入轉回 https 網址
-5. [ ] 每日通知（LINE 與 Email，先做一種、另一種候補）：通知設定與發送紀錄資料表、Java 計算、Python 每日更新後觸發；
+5. [x] 每日通知（2026-11-04 完成 Email）：Java 計算（沿用庫存分析與交易計畫）、通知模式由 GitHub Actions 在每日更新後執行、
+   我的庫存頁的通知設定、個股風險設定（保守 / 標準 / 積極，ATR 距離，大盤轉弱各加 0.5）、預覽；每個交易日每人一封、不重寄
+   - [ ] 使用者：建立 Gmail 應用程式密碼、私人 repo 加 Secrets（MAIL_USERNAME、MAIL_PASSWORD）、更新 market-daily.yml、在庫存頁開啟
+   - [ ] LINE（候補）：只在有提醒時發送；其他使用者需要網站上線後的 webhook 才能取得 LINE ID
+   原規劃：通知設定與發送紀錄資料表、Java 計算、Python 每日更新後觸發；
    內容為跌破停利線、接近停利線、除權息、進場（先做交易計畫的買進候選，「接近進場」之後再加，文字為「符合條件」而非建議）
 6. [ ] 庫存資產走勢（見下方「功能」）
 7. [ ] README 更新、UI/UX 檢視（頁面標題、404）、CI

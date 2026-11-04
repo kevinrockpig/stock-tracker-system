@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { deleteHolding, fetchHoldings } from '../api/stocks.js'
+import NotificationSettings from '../components/NotificationSettings.vue'
 import { auth, logout, markLoggedOut, startLogin, takePendingAdd } from '../utils/auth.js'
 import { formatRate, trendClass } from '../utils/format.js'
 import { groupShortName } from '../utils/groups.js'
@@ -30,6 +31,7 @@ function nullsLast(x, y) {
 const SECTIONS = [
   { id: 'holdings-positions', label: '持股' },
   { id: 'holdings-benchmark', label: '同期比較' },
+  { id: 'holdings-notify', label: '每日通知' },
   { id: 'holdings-notes', label: '計算方式' },
 ]
 
@@ -431,6 +433,10 @@ const feeRules = computed(() => data.value?.feeRules)
               庫存已扣賣出成本、0050 不計交易成本，對 0050 略為有利。持有時間短時差距主要反映運氣。
             </p>
           </template>
+
+          <!-- 每日通知 -->
+          <h2 id="holdings-notify">每日通知（Email）</h2>
+          <NotificationSettings :positions="data.positions" />
 
           <!-- 計算方式 -->
           <h2 id="holdings-notes">計算方式</h2>

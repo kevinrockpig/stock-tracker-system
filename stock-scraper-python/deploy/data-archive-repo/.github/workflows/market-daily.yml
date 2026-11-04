@@ -3,8 +3,10 @@
 # 與 official-daily.yml 一樣放在「私人 repo」的 .github/workflows/ 底下（執行紀錄會出現資料庫主機、持有的股票代號等資訊）。
 # 取代 Mac 的每日排程（scripts/install_schedule.sh），電腦關機也會更新；先與 Mac 並行一週，確認 Yahoo 不會擋 GitHub 的連線再停用 Mac。
 #
-# 流程：取出公開 repo（程式碼）→ 安裝套件 → python -m scraper.main → python -m scraper.health
-# 需要的 Secrets 與 official-daily.yml 相同：DB_URL、DB_USERNAME、DB_PASSWORD
+# 流程：取出公開 repo（程式碼）→ 安裝套件 → python -m scraper.main → python -m scraper.health → Java 寄出每日通知
+# 需要的 Secrets 與 official-daily.yml 相同：DB_URL、DB_USERNAME、DB_PASSWORD；
+# 每日通知另需 MAIL_USERNAME（寄件的 Gmail）、MAIL_PASSWORD（該帳號的應用程式密碼），沒有設定時略過通知；
+# 選填的 Variables：SITE_URL（網站網址，信中附通知設定的連結）
 # 失敗或資料檢查發現異常時 GitHub 會寄信通知；資料檢查結果顯示在執行頁面的 Summary
 
 name: 行情每日更新
@@ -36,6 +38,7 @@ jobs:
       DB_URL: ${{ secrets.DB_URL }}
       DB_USERNAME: ${{ secrets.DB_USERNAME }}
       DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      MAIL_USERNAME: ${{ secrets.MAIL_USERNAME }}   # 也用來判斷是否寄出每日通知（密碼只給寄送那一步）
     steps:
       - name: 取出程式碼（公開 repo）
         uses: actions/checkout@v7
@@ -78,3 +81,24 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "${status}"
+
+      # 每日通知：開啟 Email 的使用者每人一封（stock-api-java 的通知模式，寄完即結束）。
+      # 每個交易日只寄一次（notification_log），備援重跑或休市日執行不會重寄；有寄送失敗時這一步標示失敗
+      - name: 安裝 Java（每日通知）
+        if: ${{ !cancelled() && env.MAIL_USERNAME != '' }}
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: code/stock-backend-java/stock-api-java/pom.xml
+
+      - name: 寄出每日通知
+        if: ${{ !cancelled() && env.MAIL_USERNAME != '' }}
+        working-directory: code/stock-backend-java/stock-api-java
+        env:
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: |
+          ./mvnw -q -B -DskipTests package
+          java -jar target/stock-api-java-0.0.1-SNAPSHOT.jar --app.notify.run-once=true --server.port=0

@@ -16,4 +16,6 @@ public interface HoldingRepository extends JpaRepository<Holding, Long> {
     Optional<Holding> findByIdAndUserId(long id, long userId);
 
     long countByUserId(long userId);
+
+    boolean existsByUserIdAndSymbol(long userId, String symbol);
 }

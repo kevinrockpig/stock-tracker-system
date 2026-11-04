@@ -23,7 +23,7 @@ import org.springframework.security.web.authentication.logout.HttpStatusReturnin
  * 存取控制：
  * <ul>
  *   <li>行情、回測、交易計畫等既有 API 維持公開，不需登入</li>
- *   <li>個人資料（/api/holdings/**）需要登入；未登入回 401（不轉址），由前端顯示登入按鈕</li>
+ *   <li>個人資料（/api/holdings/**、/api/notifications/**）需要登入；未登入回 401（不轉址），由前端顯示登入按鈕</li>
  *   <li>登入：前端導向 /oauth2/authorization/google，Google 驗證後回到 /login/oauth2/code/google，
  *       成功轉回前端的庫存頁、失敗轉回並附原因；登入狀態存在伺服器端 session（HttpOnly cookie）</li>
  *   <li>CSRF：寫入請求（POST / PUT / DELETE，含登出）必須在 X-XSRF-TOKEN 標頭附上 XSRF-TOKEN cookie 的值</li>
@@ -42,7 +42,7 @@ public class SecurityConfig {
                 .cors(Customizer.withDefaults()) // 沿用各 Controller 的 @CrossOrigin 設定
                 .csrf(csrf -> csrf.spa())
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/holdings", "/api/holdings/**").authenticated()
+                        .requestMatchers("/api/holdings", "/api/holdings/**", "/api/notifications/**").authenticated()
                         .anyRequest().permitAll())
                 .exceptionHandling(e -> e.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
                 .logout(logout -> logout
