@@ -8,7 +8,7 @@
 | 個股 K 線圖 | `/stocks/2330.TW?strategy=ma_bullish&exitRule=hold_5` | `GET /api/stocks/{symbol}/history?from=…`、`GET /api/stocks/{symbol}/levels`、`GET /api/backtests?scope={symbol}`、`GET /api/stocks/{symbol}/trades?strategy=…&exitRule=…` |
 | 策略選股 | `/screener?strategy=high_120&days=10&scope=TW50` | `GET /api/strategies`、`GET /api/screener?strategy=…&days=…`、`GET /api/stocks`、`GET /api/groups`、`GET /api/backtests?scope=…` |
 | 交易計畫（往後實測） | `/plan?account=high_120/trailing_nocap#plan-positions` | `GET /api/paper` |
-| 我的庫存（需登入） | `/holdings?sort=exit#holding-2330.TW` | `GET /api/me`、`GET/POST /api/holdings`、`PUT/DELETE /api/holdings/{id}`、`POST /api/logout`；每日通知：`GET/PUT /api/notifications/settings`、`PUT /api/notifications/risk-levels/{symbol}`、`GET /api/notifications/preview` |
+| 我的庫存（需登入） | `/holdings?sort=exit#holding-2330.TW` | `GET /api/me`、`GET/POST /api/holdings`、`GET /api/holdings/history`、`PUT/DELETE /api/holdings/{id}`、`POST /api/logout`；每日通知：`GET/PUT /api/notifications/settings`、`PUT /api/notifications/risk-levels/{symbol}`、`GET /api/notifications/preview` |
 | 回測比較（投資組合） | `/portfolio?scope=TW50&sort=cagr&strategy=high_120` | `GET /api/groups`、`GET /api/portfolio-backtests?scope=…` |
 | 使用說明 | `/about#backtest` | `GET /api/strategies`、`GET /api/backtests` |
 
@@ -44,7 +44,7 @@
 由 `openHoldingForm()` 開啟）：成交價（可帶入最新收盤）、買進日期（選填）、張數與零股、手續費（公定費率 / 折數 / 實際金額，附試算）。
 手續費方式、折數與最低手續費記在瀏覽器，下次自動帶入。未登入時按「加入庫存」會到庫存頁登入，登入回來後自動開啟該檔的表單
 （Java 一律導回 `/holdings`，要加入的代號暫存在 sessionStorage）。庫存頁：總覽卡片、需要留意（跌破移動停利線、即將除權息）、
-持股表（可依市值 / 距停利線 / 報酬排序，展開明細可修改、刪除每一筆）、與同期 0050 的比較、每日通知、計算方式。
+持股表（可依市值 / 距停利線 / 報酬排序，展開明細可修改、刪除每一筆）、與同期 0050 的比較及資產走勢（`src/components/HoldingsHistory.vue`，期間 3 個月 / 1 年 / 全部，圖表沿用 `EquityChart.vue`、進入時才載入）、每日通知、計算方式。
 每日通知（`src/components/NotificationSettings.vue`）：Email 開關、除權息提醒天數、是否附上買進候選（按「儲存」才送出）；
 每檔持股的風險設定（保守 / 標準 / 積極，選了就儲存），表中顯示目前實際的提醒範圍（大盤轉弱時已加上）；「預覽今天的通知」顯示與 Email 相同的內容。
 寫入請求（新增、修改、刪除、登出）在 `X-XSRF-TOKEN` 標頭附上 `XSRF-TOKEN` cookie 的值（CSRF，`src/api/stocks.js`）。

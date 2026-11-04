@@ -101,6 +101,7 @@ export DB_URL='jdbc:postgresql://<host>:5432/<db>?sslmode=require' DB_USERNAME='
 | `GET /api/me` | 目前的登入狀態（`loginEnabled`、`authenticated`、`email`、`displayName`、`loginUrl`），並寫入 CSRF token cookie |
 | `POST /api/logout` | 登出（需 CSRF token），回 204 |
 | `GET /api/holdings` | **需登入**。自己的庫存與分析：依股票合併的成本、市值、未實現損益（扣賣出手續費與證交稅估算）、已領股利、移動停利線與距離、季線、除權息預告、目前訊號；合計；同期買 0050 比較 |
+| `GET /api/holdings/history` | **需登入**。資產走勢：每個交易日的投入成本、庫存價值（市值 − 賣出成本 + 已領股利）、同期買 0050 的價值；納入的庫存與算法同「同期比較」，最後一天等於其數字。不存快照，每次由買進紀錄、日 K、除權息即時計算 |
 | `POST /api/holdings` | **需登入、CSRF**。新增一筆買進：`symbol`、`buyDate`（選填）、`price`、`shares`、`feeMode`（`actual` / `standard` / `discount`）、`feeDiscount`、`minFee`、`fee`；回 201 與該筆內容（含計算出的手續費） |
 | `PUT /api/holdings/{id}` / `DELETE /api/holdings/{id}` | **需登入、CSRF**。修改 / 刪除自己的一筆；別人的或不存在回 404 |
 | `GET /api/stocks/{symbol}/trades?strategy=&exitRule=` | 某檔股票的歷史回測交易（進出場日期、價格、股利、報酬）；`exitRule` 短線為 `hold_5`、`hold_10`、`hold_20`、`trailing_atr`，波段為 `ma60_exit`、`trailing_nocap`；波段策略只搭配波段出場（其他組合回 400） |

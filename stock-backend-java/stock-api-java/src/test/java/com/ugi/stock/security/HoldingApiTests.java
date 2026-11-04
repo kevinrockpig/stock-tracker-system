@@ -60,6 +60,16 @@ class HoldingApiTests {
                 .andExpect(jsonPath("$.positions[0].name").value("台積電"));
         mvc.perform(get("/api/holdings").with(other)).andExpect(jsonPath("$.count").value(0));
 
+        // 資產走勢：未登入 401；只看得到自己的
+        mvc.perform(get("/api/holdings/history")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/holdings/history").with(me))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lots").value(1))
+                .andExpect(jsonPath("$.points[0].date").value("2026-06-01"));
+        mvc.perform(get("/api/holdings/history").with(other))
+                .andExpect(jsonPath("$.lots").value(0))
+                .andExpect(jsonPath("$.points.length()").value(0));
+
         // 錯誤輸入：400 與中文說明
         mvc.perform(post("/api/holdings").with(me).with(csrf()).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"symbol\":\"2330.TW\",\"price\":0,\"shares\":1,\"feeMode\":\"standard\"}"))

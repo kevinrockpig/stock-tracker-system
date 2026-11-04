@@ -153,6 +153,11 @@ export function fetchHoldings() {
   return getJson('/api/holdings')
 }
 
+// 資產走勢：{ asOf, etfSymbol, lots, excludedLots, points: [{ date, invested, holdingsValue, etfValue }] }
+export function fetchHoldingsHistory() {
+  return getJson('/api/holdings/history')
+}
+
 // body：{ symbol, buyDate, price, shares, feeMode, feeDiscount, minFee, fee }；回傳存好的一筆（含計算後的手續費）
 export function createHolding(body) {
   return send('POST', '/api/holdings', body)

@@ -220,17 +220,17 @@ public class HoldingService {
         return new HoldingsResponse(asOf, summary, benchmark(calcs, asOf), positions, holdings.size(), MAX_HOLDINGS, feeRules);
     }
 
-    private LocalDate latestTradeDate() {
+    LocalDate latestTradeDate() {
         return priceRepository.findRecentTradeDates(PageRequest.of(0, 1)).stream().findFirst().orElse(null);
     }
 
-    private List<StockAction> actions(String symbol) {
+    List<StockAction> actions(String symbol) {
         return actionRepository.findBySymbolOrderByExDateAsc(symbol);
     }
 
     // 一筆買進換算成目前的基準：買進日之後（到 asOf 為止）的股數變動相乘；現金股利依換算後的股數計算。
     // stock_actions 的股利已依之後的股數變動調整（與價格同一基準），所以乘上換算後的股數就是實際領到的金額
-    private Lot lot(Holding h, List<StockAction> actions, LocalDate asOf) {
+    Lot lot(Holding h, List<StockAction> actions, LocalDate asOf) {
         BigDecimal splitRatio = BigDecimal.ONE;
         BigDecimal dividendPerShare = BigDecimal.ZERO;
         if (h.getBuyDate() != null) {
@@ -304,7 +304,7 @@ public class HoldingService {
     }
 
     // 全部賣出的成本估算：手續費依最近一筆的方式（「實際金額」無法得知折扣，以公定費率、最低 20 元估算）＋證交稅
-    private static BigDecimal sellCost(String symbol, BigDecimal marketValue, Holding latest) {
+    static BigDecimal sellCost(String symbol, BigDecimal marketValue, Holding latest) {
         BigDecimal discount = "discount".equals(latest.getFeeMode()) ? latest.getFeeDiscount() : BigDecimal.ONE;
         BigDecimal minFee = latest.getMinFee() == null ? DEFAULT_MIN_FEE : latest.getMinFee();
         return TradingCosts.fee(marketValue, discount, minFee).add(TradingCosts.tax(marketValue, symbol));

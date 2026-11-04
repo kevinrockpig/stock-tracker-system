@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { deleteHolding, fetchHoldings } from '../api/stocks.js'
+import HoldingsHistory from '../components/HoldingsHistory.vue'
 import NotificationSettings from '../components/NotificationSettings.vue'
 import { auth, logout, markLoggedOut, startLogin, takePendingAdd } from '../utils/auth.js'
 import { formatRate, trendClass } from '../utils/format.js'
@@ -30,7 +31,7 @@ function nullsLast(x, y) {
 
 const SECTIONS = [
   { id: 'holdings-positions', label: '持股' },
-  { id: 'holdings-benchmark', label: '同期比較' },
+  { id: 'holdings-benchmark', label: '同期比較與走勢' },
   { id: 'holdings-notify', label: '每日通知' },
   { id: 'holdings-notes', label: '計算方式' },
 ]
@@ -407,7 +408,7 @@ const feeRules = computed(() => data.value?.feeRules)
           </p>
 
           <!-- 同期比較 -->
-          <h2 id="holdings-benchmark">同期比較：同一天買 0050</h2>
+          <h2 id="holdings-benchmark">同期比較與走勢：同一天買 0050</h2>
           <p class="meta">每一筆有填買進日期的庫存，假設同一天（非交易日為下一個交易日）以同樣的成本在收盤買進 0050，比較到今天的價值（都含已領股利）。</p>
           <p v-if="!data.benchmark.lots" class="status">填了買進日期的庫存才能比較。</p>
           <template v-else>
@@ -432,6 +433,7 @@ const feeRules = computed(() => data.value?.feeRules)
               納入 {{ data.benchmark.lots }} 筆<template v-if="data.benchmark.excludedLots">，未納入 {{ data.benchmark.excludedLots }} 筆（沒有買進日期）</template>。
               庫存已扣賣出成本、0050 不計交易成本，對 0050 略為有利。持有時間短時差距主要反映運氣。
             </p>
+            <HoldingsHistory :holdings="data" />
           </template>
 
           <!-- 每日通知 -->

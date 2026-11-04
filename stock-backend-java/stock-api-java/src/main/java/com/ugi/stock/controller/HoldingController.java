@@ -1,8 +1,10 @@
 package com.ugi.stock.controller;
 
+import com.ugi.stock.dto.HoldingHistoryResponse;
 import com.ugi.stock.dto.HoldingRequest;
 import com.ugi.stock.dto.HoldingsResponse;
 import com.ugi.stock.security.AppUserPrincipal;
+import com.ugi.stock.service.HoldingHistoryService;
 import com.ugi.stock.service.HoldingService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -27,10 +29,17 @@ import org.springframework.web.bind.annotation.RestController;
 public class HoldingController {
 
     private final HoldingService holdingService;
+    private final HoldingHistoryService historyService;
 
     @GetMapping
     public HoldingsResponse getHoldings(@AuthenticationPrincipal AppUserPrincipal user) {
         return holdingService.getHoldings(user.getUserId());
+    }
+
+    // 資產走勢：每日的投入成本、庫存價值與同期 0050 的價值
+    @GetMapping("/history")
+    public HoldingHistoryResponse getHistory(@AuthenticationPrincipal AppUserPrincipal user) {
+        return historyService.getHistory(user.getUserId());
     }
 
     @PostMapping
