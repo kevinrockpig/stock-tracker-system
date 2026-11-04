@@ -92,6 +92,56 @@ class HoldingApiTests {
     }
 
     @Test
+    void salesOverHttp() throws Exception {
+        long id = users.recordLogin("google", "test-sale-http", "sale.http@example.com", "Http");
+        long otherId = users.recordLogin("google", "test-sale-http-2", "sale.http2@example.com", "Other");
+        var me = authentication(SecurityTests.loggedIn(id, "sale.http@example.com"));
+        var other = authentication(SecurityTests.loggedIn(otherId, "sale.http2@example.com"));
+        mvc.perform(post("/api/holdings").with(me).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(BODY))
+                .andExpect(status().isCreated());
+        String sale = """
+                {"symbol":"2330.TW","sellDate":"2026-07-01","price":1200,"shares":400,"feeMode":"standard","taxMode":"standard"}""";
+
+        // 未登入 401；沒有 CSRF token 403
+        mvc.perform(post("/api/holdings/sales").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(sale))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/holdings/sales").with(me).contentType(MediaType.APPLICATION_JSON).content(sale))
+                .andExpect(status().isForbidden());
+
+        String created = mvc.perform(post("/api/holdings/sales").with(me).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(sale))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.amount").value(480000))
+                .andExpect(jsonPath("$.tax").value(1440))
+                .andExpect(jsonPath("$.lots[0].shares").value(400))
+                .andReturn().getResponse().getContentAsString();
+        long saleId = Long.parseLong(created.replaceAll("^\\{\"id\":(\\d+).*", "$1"));
+
+        mvc.perform(get("/api/holdings").with(me))
+                .andExpect(jsonPath("$.positions[0].shares").value(600))
+                .andExpect(jsonPath("$.realized.count").value(1))
+                .andExpect(jsonPath("$.realized.sales[0].id").value(saleId));
+        // 超賣：400 與說明
+        mvc.perform(post("/api/holdings/sales").with(me).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content(sale.replace("\"shares\":400", "\"shares\":601")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("賣出 601 股超過 2026-07-01 當時可賣的 600 股（只計當天以前買進的，並扣除之前的賣出）"));
+
+        // 別人的：404；自己的可以修改、刪除
+        mvc.perform(put("/api/holdings/sales/" + saleId).with(other).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(sale))
+                .andExpect(status().isNotFound());
+        mvc.perform(delete("/api/holdings/sales/" + saleId).with(other).with(csrf())).andExpect(status().isNotFound());
+        mvc.perform(put("/api/holdings/sales/" + saleId).with(me).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content(sale.replace("\"shares\":400", "\"shares\":1000")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.shares").value(1000));
+        mvc.perform(get("/api/holdings").with(me))
+                .andExpect(jsonPath("$.positions.length()").value(0))
+                .andExpect(jsonPath("$.realized.closedPositions[0].symbol").value("2330.TW"));
+        mvc.perform(delete("/api/holdings/sales/" + saleId).with(me).with(csrf())).andExpect(status().isNoContent());
+        mvc.perform(get("/api/holdings").with(me)).andExpect(jsonPath("$.realized.count").value(0));
+    }
+
+    @Test
     void noCrossOriginAccess() throws Exception {
         long id = users.recordLogin("google", "test-cors", "cors.test@example.com", "Cors");
         mvc.perform(get("/api/holdings").with(authentication(SecurityTests.loggedIn(id, "cors.test@example.com")))

@@ -1,4 +1,4 @@
-"""使用者資料表（app_users / user_identities / holdings）的結構：由本服務建立、Java API 寫入，雙方須一致。"""
+"""使用者資料表（app_users / user_identities / holdings / holding_sales 等）的結構：由本服務建立、Java API 寫入，雙方須一致。"""
 
 from sqlalchemy import CheckConstraint, UniqueConstraint
 
@@ -19,15 +19,16 @@ def test_one_user_per_email_and_identity():
 
 
 def test_user_data_deleted_with_user():
-    for table in (db.user_identities, db.holdings):
+    for table in (db.user_identities, db.holdings, db.holding_sales):
         fk = next(iter(table.c.user_id.foreign_keys))
         assert fk.column.table is db.app_users
         assert fk.ondelete == "CASCADE"
 
 
 def test_holding_symbol_must_be_known_stock():
-    fk = next(iter(db.holdings.c.symbol.foreign_keys))
-    assert fk.column is db.stocks.c.symbol
+    for table in (db.holdings, db.holding_sales):
+        fk = next(iter(table.c.symbol.foreign_keys))
+        assert fk.column is db.stocks.c.symbol
 
 
 def test_holding_optional_columns():
@@ -45,10 +46,28 @@ def test_holding_checks_cover_every_fee_mode():
         assert f"'{mode}'" in checks["ck_holdings_fee_mode"]
 
 
+def test_sale_columns_and_checks():
+    # 賣出日期必填（先進先出依日期扣）；手續費方式與買進相同，另有證交稅方式
+    nullable = {c.name for c in db.holding_sales.columns if c.nullable}
+    assert nullable == {"fee_discount", "min_fee"}
+    checks = _checks(db.holding_sales)
+    assert set(checks) == {
+        "ck_holding_sales_price", "ck_holding_sales_shares", "ck_holding_sales_fee", "ck_holding_sales_tax",
+        "ck_holding_sales_min_fee", "ck_holding_sales_fee_mode", "ck_holding_sales_fee_discount", "ck_holding_sales_tax_mode",
+    }
+    for mode in db.HOLDING_FEE_MODES:
+        assert f"'{mode}'" in checks["ck_holding_sales_fee_mode"]
+    for mode in db.SALE_TAX_MODES:
+        assert f"'{mode}'" in checks["ck_holding_sales_tax_mode"]
+    # 與買進的手續費折數規則相同
+    assert checks["ck_holding_sales_fee_discount"] == _checks(db.holdings)["ck_holdings_fee_discount"]
+
+
 def test_user_tables_created_after_stocks():
     order = [t.name for t in db.metadata.sorted_tables]
     assert order.index("app_users") < order.index("holdings")
     assert order.index("stocks") < order.index("holdings")
+    assert order.index("app_users") < order.index("holding_sales")
 
 
 def test_spring_session_tables_match_official_schema():

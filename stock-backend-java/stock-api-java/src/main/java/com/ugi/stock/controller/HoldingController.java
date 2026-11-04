@@ -3,8 +3,10 @@ package com.ugi.stock.controller;
 import com.ugi.stock.dto.HoldingHistoryResponse;
 import com.ugi.stock.dto.HoldingRequest;
 import com.ugi.stock.dto.HoldingsResponse;
+import com.ugi.stock.dto.SaleRequest;
 import com.ugi.stock.security.AppUserPrincipal;
 import com.ugi.stock.service.HoldingHistoryService;
+import com.ugi.stock.service.HoldingSaleService;
 import com.ugi.stock.service.HoldingService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -30,6 +32,7 @@ public class HoldingController {
 
     private final HoldingService holdingService;
     private final HoldingHistoryService historyService;
+    private final HoldingSaleService saleService;
 
     @GetMapping
     public HoldingsResponse getHoldings(@AuthenticationPrincipal AppUserPrincipal user) {
@@ -58,5 +61,24 @@ public class HoldingController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@AuthenticationPrincipal AppUserPrincipal user, @PathVariable long id) {
         holdingService.delete(user.getUserId(), id);
+    }
+
+    // 賣出紀錄：從哪幾筆買進扣（先進先出）與已實現損益在 GET /api/holdings 的 realized 中
+    @PostMapping("/sales")
+    @ResponseStatus(HttpStatus.CREATED)
+    public HoldingsResponse.Sale createSale(@AuthenticationPrincipal AppUserPrincipal user, @RequestBody SaleRequest request) {
+        return saleService.create(user.getUserId(), request);
+    }
+
+    @PutMapping("/sales/{id}")
+    public HoldingsResponse.Sale updateSale(@AuthenticationPrincipal AppUserPrincipal user, @PathVariable long id,
+                                            @RequestBody SaleRequest request) {
+        return saleService.update(user.getUserId(), id, request);
+    }
+
+    @DeleteMapping("/sales/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteSale(@AuthenticationPrincipal AppUserPrincipal user, @PathVariable long id) {
+        saleService.delete(user.getUserId(), id);
     }
 }

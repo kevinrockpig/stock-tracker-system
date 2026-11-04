@@ -1,9 +1,10 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { deleteHolding, fetchHoldings } from '../api/stocks.js'
+import { deleteHolding, deleteSale, fetchHoldings } from '../api/stocks.js'
 import HoldingsHistory from '../components/HoldingsHistory.vue'
 import NotificationSettings from '../components/NotificationSettings.vue'
+import SaleDialog from '../components/SaleDialog.vue'
 import { auth, logout, markLoggedOut, startLogin, takePendingAdd } from '../utils/auth.js'
 import { formatRate, trendClass } from '../utils/format.js'
 import { groupShortName } from '../utils/groups.js'
@@ -31,6 +32,7 @@ function nullsLast(x, y) {
 
 const SECTIONS = [
   { id: 'holdings-positions', label: '持股' },
+  { id: 'holdings-realized', label: '已實現' },
   { id: 'holdings-benchmark', label: '同期比較與走勢' },
   { id: 'holdings-notify', label: '每日通知' },
   { id: 'holdings-notes', label: '計算方式' },
@@ -43,8 +45,10 @@ const data = ref(null)
 const loading = ref(false)
 const error = ref('')
 const message = ref('') // 新增、修改、刪除後的結果
+const messageIsError = ref(false) // 被擋下的修改（例如賣出會超過買進）以紅色顯示，不取代整頁
 const loginError = ref('')
 const expanded = ref(new Set())
+const expandedSales = ref(new Set())
 
 async function load() {
   loading.value = true
@@ -121,18 +125,29 @@ const attention = computed(() => {
 
 const hasNotes = (p) => p.belowExitLine || p.belowMa60 || p.nextExDate || p.signals.length > 0
 
-function toggle(symbol) {
-  const next = new Set(expanded.value)
-  if (next.has(symbol)) next.delete(symbol)
-  else next.add(symbol)
-  expanded.value = next
+function toggleIn(set, key) {
+  const next = new Set(set.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  set.value = next
+}
+const toggle = (symbol) => toggleIn(expanded, symbol)
+const toggleSale = (id) => toggleIn(expandedSales, id)
+
+// 目錄：有賣出紀錄才顯示「已實現」
+const sections = computed(() => SECTIONS.filter((s) => s.id !== 'holdings-realized' || data.value?.realized.count))
+const hasSold = (p) => p.lots.some((lot) => lot.soldShares > 0)
+
+function showMessage(text, isError = false) {
+  message.value = text
+  messageIsError.value = isError
 }
 
 function afterSave(verb) {
   return async (lot) => {
     await load()
     const name = data.value?.positions.find((p) => p.symbol === lot.symbol)?.name ?? lot.symbol
-    message.value = `${verb}：${name} ${formatShares(lot.shares)} @ ${price(lot.price)}，手續費 ${money(lot.fee)} 元。`
+    showMessage(`${verb}：${name} ${formatShares(lot.shares)} @ ${price(lot.price)}，手續費 ${money(lot.fee)} 元。`)
     expanded.value = new Set([...expanded.value, lot.symbol])
   }
 }
@@ -149,16 +164,68 @@ function editLot(position, lot) {
 
 async function removeLot(position, lot) {
   const when = lot.buyDate ? `${lot.buyDate} 買進的` : ''
-  if (!window.confirm(`刪除 ${position.name} ${when}${formatShares(lot.shares)} @ ${price(lot.price)}？刪除後無法復原。`)) return
+  const sold = lot.soldShares > 0 ? '這筆有一部分已賣出，刪除後賣出會改從其他買進扣（不夠扣時會被擋下）。' : ''
+  if (!window.confirm(`刪除 ${position.name} ${when}${formatShares(lot.shares)} @ ${price(lot.price)}？${sold}刪除後無法復原。`)) return
   message.value = ''
   try {
     await deleteHolding(lot.id)
-    message.value = `已刪除：${position.name} ${formatShares(lot.shares)} @ ${price(lot.price)}。`
+    showMessage(`已刪除：${position.name} ${formatShares(lot.shares)} @ ${price(lot.price)}。`)
     await load()
   } catch (err) {
-    if (err.status === 401) markLoggedOut()
-    error.value = err.message
+    handleWriteError(err)
   }
+}
+
+// 寫入失敗：輸入或先進先出的問題（400）顯示在訊息列，其他錯誤顯示在頁面上方
+function handleWriteError(err) {
+  if (err.status === 401) markLoggedOut()
+  else if (err.status === 400) showMessage(err.message, true)
+  else error.value = err.message
+}
+
+// ---- 賣出 ----
+
+const saleDialog = ref({ open: false, position: null, sale: null })
+// 修改賣出時，找出那檔的買進（持股或已全部賣出）
+const positionOf = (symbol) =>
+  data.value?.positions.find((p) => p.symbol === symbol) ?? data.value?.realized.closedPositions.find((p) => p.symbol === symbol) ?? null
+
+function openSale(position) {
+  message.value = ''
+  saleDialog.value = { open: true, position, sale: null }
+}
+
+function editSale(sale) {
+  message.value = ''
+  saleDialog.value = { open: true, position: positionOf(sale.symbol), sale }
+}
+
+function closeSale() {
+  if (saleDialog.value.open) saleDialog.value = { ...saleDialog.value, open: false }
+}
+
+async function saleSaved(sale) {
+  const verb = saleDialog.value.sale ? '已修改賣出' : '已記錄賣出'
+  closeSale()
+  await load()
+  showMessage(`${verb}：${sale.name} ${formatShares(sale.shares)} @ ${price(sale.price)}，拿回 ${money(sale.proceeds)} 元，已實現損益 ${signedMoney(sale.realizedPnl)} 元。`)
+}
+
+async function removeSale(sale) {
+  if (!window.confirm(`刪除 ${sale.sellDate} 賣出的 ${sale.name} ${formatShares(sale.shares)} @ ${price(sale.price)}？刪除後這些股數會回到持股。`)) return
+  message.value = ''
+  try {
+    await deleteSale(sale.id)
+    showMessage(`已刪除賣出：${sale.name} ${sale.sellDate} ${formatShares(sale.shares)}。`)
+    await load()
+  } catch (err) {
+    handleWriteError(err)
+  }
+}
+
+// 這筆賣出從哪幾筆買進扣
+function saleLotText(lot) {
+  return `${lot.buyDate ?? '未填日期'} 買進 @ ${price(lot.buyPrice)}：${formatShares(lot.shares)}，成本 ${money(lot.cost)}`
 }
 
 const loggingOut = ref(false)
@@ -187,6 +254,7 @@ const stockLink = (symbol) => ({ name: 'stock-detail', params: { symbol } })
 function lotDetails(lot) {
   const parts = []
   if (lot.splitRatio !== 1) parts.push(`分割 / 配股換算 ×${Number(lot.splitRatio.toFixed(4))} → 現在 ${formatShares(lot.currentShares)}`)
+  if (lot.soldShares > 0) parts.push(lot.remainingShares > 0 ? `已賣出 ${formatShares(lot.soldShares)}，剩 ${formatShares(lot.remainingShares)}` : '已全部賣出')
   if (lot.dividends) parts.push(`已領股利 ${money(lot.dividends)}`)
   return parts.join(' · ')
 }
@@ -250,9 +318,9 @@ const feeRules = computed(() => data.value?.feeRules)
           <button type="button" class="primary" :disabled="data.count >= data.maxCount" @click="addLot">＋ 新增一筆</button>
           <span class="meta">共 {{ data.count }} 筆（上限 {{ data.maxCount }}）<template v-if="data.asOf"> · 以 {{ data.asOf }} 收盤價計算</template></span>
         </div>
-        <p v-if="message" class="message" role="status">{{ message }}</p>
+        <p v-if="message" class="message" :class="{ 'message-error': messageIsError }" :role="messageIsError ? 'alert' : 'status'">{{ message }}</p>
 
-        <div v-if="!data.positions.length" class="status empty">
+        <div v-if="!data.positions.length && !data.realized.count" class="status empty">
           <p>還沒有庫存。按「新增一筆」，或在股票清單、個股頁按「加入庫存」。</p>
           <p class="meta">只能加入觀察名單內的股票。</p>
         </div>
@@ -275,10 +343,22 @@ const feeRules = computed(() => data.value?.feeRules)
               <span class="sub">有填買進日期的部分</span>
             </div>
             <div class="card">
-              <span class="label">含股利總損益</span>
+              <span class="label">{{ data.realized.count ? '持股含股利損益' : '含股利總損益' }}</span>
               <span class="value" :class="trendClass(data.summary.totalPnl)">{{ signedMoney(data.summary.totalPnl) }}</span>
               <span class="sub" :class="trendClass(data.summary.totalReturn)">{{ rate(data.summary.totalReturn) }}</span>
             </div>
+            <template v-if="data.realized.count">
+              <div class="card">
+                <span class="label">已實現損益</span>
+                <span class="value" :class="trendClass(data.realized.realizedPnl)">{{ signedMoney(data.realized.realizedPnl) }}</span>
+                <span class="sub" :class="trendClass(data.realized.realizedReturn)">{{ rate(data.realized.realizedReturn) }}（先進先出）</span>
+              </div>
+              <div class="card">
+                <span class="label">總損益</span>
+                <span class="value" :class="trendClass(data.realized.overallPnl)">{{ signedMoney(data.realized.overallPnl) }}</span>
+                <span class="sub">持股 + 已實現 + 股利</span>
+              </div>
+            </template>
           </div>
 
           <div v-if="attention.length" class="attention">
@@ -294,7 +374,7 @@ const feeRules = computed(() => data.value?.feeRules)
           </div>
 
           <nav class="toc" aria-label="本頁段落">
-            <RouterLink v-for="section in SECTIONS" :key="section.id" :to="{ query: route.query, hash: `#${section.id}` }">{{
+            <RouterLink v-for="section in sections" :key="section.id" :to="{ query: route.query, hash: `#${section.id}` }">{{
               section.label
             }}</RouterLink>
           </nav>
@@ -308,7 +388,8 @@ const feeRules = computed(() => data.value?.feeRules)
             </button>
           </div>
 
-          <div class="table-wrap">
+          <p v-if="!data.positions.length" class="status">目前沒有持股（都已賣出，見下方「已實現損益」）。</p>
+          <div v-else class="table-wrap">
             <table class="stack">
               <thead>
                 <tr>
@@ -339,6 +420,7 @@ const feeRules = computed(() => data.value?.feeRules)
                       >
                         {{ expanded.has(p.symbol) ? '收合' : '明細' }} {{ p.lots.length }} 筆
                       </button>
+                      <button type="button" class="toggle" @click="openSale(p)">賣出</button>
                     </th>
                     <td class="num" data-label="股數">{{ formatShares(p.shares) }}</td>
                     <td class="num" data-label="每股成本">
@@ -353,6 +435,9 @@ const feeRules = computed(() => data.value?.feeRules)
                     <td class="num" data-label="未實現損益">
                       <span :class="trendClass(p.unrealizedPnl)">{{ signedMoney(p.unrealizedPnl) }}</span>
                       <span class="sub" :class="trendClass(p.unrealizedReturn)">{{ rate(p.unrealizedReturn) }}</span>
+                      <span v-if="hasSold(p) && p.overallPnl != null" class="sub"
+                        >整檔合計 <span :class="trendClass(p.overallPnl)">{{ signedMoney(p.overallPnl) }}</span></span
+                      >
                     </td>
                     <td class="num" data-label="已領股利">
                       {{ p.dividends ? money(p.dividends) : '—' }}
@@ -393,6 +478,13 @@ const feeRules = computed(() => data.value?.feeRules)
                           </div>
                         </li>
                       </ul>
+                      <p v-if="hasSold(p)" class="sub">
+                        這檔已實現損益 <span :class="trendClass(p.realizedPnl)">{{ signedMoney(p.realizedPnl) }}</span>、賣出部分的股利
+                        {{ money(p.realizedDividends) }}；整檔合計（未實現 + 已實現 + 股利）<span :class="trendClass(p.overallPnl)">{{
+                          signedMoney(p.overallPnl)
+                        }}</span
+                        >。
+                      </p>
                       <p v-if="p.trailingFrom && !p.historyComplete" class="sub">
                         買進日期早於系統的資料起點，最高收盤價從 {{ p.trailingFrom }} 之後有資料的日期算起。
                       </p>
@@ -407,9 +499,132 @@ const feeRules = computed(() => data.value?.feeRules)
             ATR(14)，與交易計畫相同；「距停利線」小於 5% 以橘色標示。股數依買進日之後的分割、配股、減資換算成現在的股數。
           </p>
 
+
+          <!-- 已實現損益 -->
+          <template v-if="data.realized.count">
+            <h2 id="holdings-realized">已實現損益</h2>
+            <p class="meta">
+              賣出依先進先出（與券商相同）從最早買進的扣，沒有買進日期的視為最早；修改過去的買進或賣出後自動重新計算。
+              為了移動停利先出場時，單筆可能是負的，看「整檔合計」與「總損益」較能反映整體結果。
+            </p>
+            <div class="cards">
+              <div class="card">
+                <span class="label">已實現損益</span>
+                <span class="value" :class="trendClass(data.realized.realizedPnl)">{{ signedMoney(data.realized.realizedPnl) }}</span>
+                <span class="sub">拿回 {{ money(data.realized.proceeds) }} − 成本 {{ money(data.realized.cost) }}</span>
+              </div>
+              <div class="card">
+                <span class="label">賣出部分的股利</span>
+                <span class="value">{{ money(data.realized.dividends) }}</span>
+                <span class="sub">{{ data.realized.dividendsComplete ? '持有期間領到的' : '未填買進日期的部分不計' }}</span>
+              </div>
+              <div class="card">
+                <span class="label">總損益</span>
+                <span class="value" :class="trendClass(data.realized.overallPnl)">{{ signedMoney(data.realized.overallPnl) }}</span>
+                <span class="sub">持股 + 已實現 + 股利</span>
+              </div>
+            </div>
+
+            <div class="table-wrap">
+              <table class="stack">
+                <thead>
+                  <tr>
+                    <th>賣出</th>
+                    <th class="num">股數</th>
+                    <th class="num">成交價</th>
+                    <th class="num">拿回金額</th>
+                    <th class="num">買進成本</th>
+                    <th class="num">已實現損益</th>
+                    <th class="num">持有期間股利</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template v-for="sale in data.realized.sales" :key="sale.id">
+                    <tr>
+                      <th scope="row">
+                        <strong class="sale-date">{{ sale.sellDate }}</strong>
+                        <RouterLink :to="stockLink(sale.symbol)">{{ sale.name }}</RouterLink>
+                        <span class="code">{{ sale.symbol }}</span>
+                        <button
+                          type="button"
+                          class="toggle"
+                          :aria-expanded="expandedSales.has(sale.id)"
+                          :aria-controls="`sale-${sale.id}`"
+                          @click="toggleSale(sale.id)"
+                        >
+                          {{ expandedSales.has(sale.id) ? '收合' : '明細' }}
+                        </button>
+                      </th>
+                      <td class="num" data-label="股數">{{ formatShares(sale.shares) }}</td>
+                      <td class="num" data-label="成交價">{{ price(sale.price) }}</td>
+                      <td class="num" data-label="拿回金額">
+                        {{ money(sale.proceeds) }}<span class="sub">手續費 {{ money(sale.fee) }} · 稅 {{ money(sale.tax) }}</span>
+                      </td>
+                      <td class="num" data-label="買進成本">{{ money(sale.cost) }}</td>
+                      <td class="num" data-label="已實現損益">
+                        <span :class="trendClass(sale.realizedPnl)">{{ signedMoney(sale.realizedPnl) }}</span>
+                        <span class="sub" :class="trendClass(sale.realizedReturn)">{{ rate(sale.realizedReturn) }}</span>
+                      </td>
+                      <td class="num" data-label="持有期間股利">
+                        {{ money(sale.dividends) }}
+                        <span v-if="!sale.dividendsComplete" class="sub">未填日期的部分不計</span>
+                      </td>
+                    </tr>
+                    <tr v-if="expandedSales.has(sale.id)" :id="`sale-${sale.id}`" class="lots-row">
+                      <td colspan="7">
+                        <ul class="lots">
+                          <li v-for="lot in sale.lots" :key="lot.holdingId">
+                            <div class="lot-main">{{ saleLotText(lot) }}</div>
+                          </li>
+                          <li v-if="sale.unmatchedShares > 0" class="unmatched">
+                            有 {{ formatShares(sale.unmatchedShares) }} 找不到可扣的買進（之前的紀錄被修改過），成本未計入，請檢查買進或賣出紀錄。
+                          </li>
+                        </ul>
+                        <div class="lot-actions">
+                          <button type="button" class="link" @click="editSale(sale)">修改</button>
+                          <button type="button" class="link danger" @click="removeSale(sale)">刪除</button>
+                        </div>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+
+            <template v-if="data.realized.closedPositions.length">
+              <h3 class="closed-title">已全部賣出</h3>
+              <ul class="closed">
+                <li v-for="c in data.realized.closedPositions" :key="c.symbol">
+                  <div>
+                    <RouterLink :to="stockLink(c.symbol)">{{ c.name }}</RouterLink>
+                    <span class="code">{{ c.symbol }}</span>
+                    已實現 <span :class="trendClass(c.realizedPnl)">{{ signedMoney(c.realizedPnl) }}</span> · 股利 {{ money(c.dividends) }} · 合計
+                    <span :class="trendClass(c.overallPnl)">{{ signedMoney(c.overallPnl) }}</span>
+                    <button type="button" class="toggle" :aria-expanded="expanded.has(c.symbol)" @click="toggle(c.symbol)">
+                      買進紀錄 {{ c.lots.length }} 筆
+                    </button>
+                  </div>
+                  <ul v-if="expanded.has(c.symbol)" class="lots">
+                    <li v-for="lot in c.lots" :key="lot.id">
+                      <div class="lot-main">
+                        <strong>{{ lot.buyDate ?? '未填日期' }}</strong>
+                        {{ formatShares(lot.shares) }} @ {{ price(lot.price) }} · 成本 {{ money(lot.cost) }}
+                      </div>
+                      <div v-if="lotDetails(lot)" class="lot-sub">{{ lotDetails(lot) }}</div>
+                      <div class="lot-actions">
+                        <button type="button" class="link" @click="editLot(c, lot)">修改</button>
+                        <button type="button" class="link danger" @click="removeLot(c, lot)">刪除</button>
+                      </div>
+                    </li>
+                  </ul>
+                </li>
+              </ul>
+            </template>
+          </template>
+
           <!-- 同期比較 -->
           <h2 id="holdings-benchmark">同期比較與走勢：同一天買 0050</h2>
-          <p class="meta">每一筆有填買進日期的庫存，假設同一天（非交易日為下一個交易日）以同樣的成本在收盤買進 0050，比較到今天的價值（都含已領股利）。</p>
+          <p class="meta">每一筆有填買進日期的庫存，假設同一天（非交易日為下一個交易日）以同樣的成本在收盤買進 0050，比較到今天的價值（都含已領股利）。<template v-if="data.realized.count">已賣出的部分以拿回的金額（現金）計入，投入成本不變。</template></p>
           <p v-if="!data.benchmark.lots" class="status">填了買進日期的庫存才能比較。</p>
           <template v-else>
             <div class="cards">
@@ -451,11 +666,23 @@ const feeRules = computed(() => data.value?.feeRules)
               證交稅（賣出時）：股票 {{ plainRate(feeRules.taxStock) }}、ETF {{ plainRate(feeRules.taxEtf) }}。賣出手續費依該檔最近一筆的方式估算（「實際金額」以公定費率估算）。
             </li>
             <li>已領股利：買進日之後的除息日，每股現金股利 × 當時持有的股數。沒有買進日期的不計。</li>
+            <li>
+              賣出：依先進先出從最早買進的扣（與券商相同；沒有買進日期的視為最早，只扣賣出日以前買進的）。已實現損益 = 成交金額 − 手續費 − 證交稅 −
+              這些股數的買進成本；持股的股數與成本只計還沒賣出的部分，移動停利線從剩下的買進中最早的日期起算。
+            </li>
             <li>資料為日收盤價，非即時報價；僅供參考，不構成投資建議。</li>
           </ul>
         </template>
       </template>
     </template>
+    <SaleDialog
+      :open="saleDialog.open"
+      :position="saleDialog.position"
+      :sale="saleDialog.sale"
+      :fee-rules="feeRules ?? undefined"
+      @close="closeSale"
+      @saved="saleSaved"
+    />
   </section>
 </template>
 
@@ -534,6 +761,12 @@ h2 {
   border-radius: 4px;
   background: #eef8f1;
   font-size: 13px;
+}
+
+.message.message-error {
+  border-left-color: #b42318;
+  background: #fdecea;
+  color: #8a1c13;
 }
 
 .status.empty p {
@@ -783,6 +1016,31 @@ tr.highlighted td {
 .lot-actions {
   display: flex;
   gap: 12px;
+}
+
+.sale-date {
+  margin-right: 6px;
+}
+
+.closed-title {
+  margin: 18px 0 6px;
+  font-size: 15px;
+}
+
+.closed {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+}
+
+.closed > li {
+  padding: 6px 0;
+  border-bottom: 1px solid #f1f3f5;
+}
+
+.unmatched {
+  color: #b42318;
 }
 
 .rules {

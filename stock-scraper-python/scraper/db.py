@@ -19,6 +19,7 @@
   app_users         使用者，一人一筆
   user_identities   登入方式（目前為 Google；日後可加自設密碼），同一使用者可有多種
   holdings          使用者自行填寫的庫存，一筆為一次買進
+  holding_sales     賣出紀錄，一筆為一次賣出（從哪幾筆買進扣由 Java 依先進先出計算，不另存）
   notification_settings  通知設定（每位使用者一筆）；holding_risk_levels 個股風險設定；notification_log 發送紀錄
   spring_session / spring_session_attributes
                     登入狀態（Java 的 Spring Session JDBC 讀寫；主機重新啟動或部署後不會被登出），
@@ -458,7 +459,7 @@ user_identities = Table(
     Index("ix_user_identities_user", "user_id"),
 )
 
-# 庫存：一筆為一次買進（同一檔可多筆，畫面合併顯示平均成本）。賣出時直接刪除，第一版不記錄已實現損益。
+# 庫存：一筆為一次買進（同一檔可多筆，畫面合併顯示平均成本）。賣出記在 holding_sales，買進這筆不修改。
 # 手續費方式：actual 實際金額 / standard 公定費率 / discount 公定費率 × 折數；fee 一律存實際收取或計算後的金額
 HOLDING_FEE_MODES = ("actual", "standard", "discount")
 holdings = Table(
@@ -488,6 +489,45 @@ holdings = Table(
         name="ck_holdings_fee_discount",
     ),
     Index("ix_holdings_user", "user_id"),
+)
+
+# 賣出紀錄：一筆為一次賣出（同一檔可分次賣出）。股數為賣出當時的股數；從哪幾筆買進扣、已實現損益由 Java 每次依
+# 先進先出（與券商相同）即時計算，所以修改過去的買進紀錄後會自動一致。手續費方式同 holdings；
+# 證交稅：standard 依法定稅率計算（股票 0.3%、ETF 0.1%）/ actual 實際金額，tax 一律存金額
+SALE_TAX_MODES = ("standard", "actual")
+holding_sales = Table(
+    "holding_sales",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False),
+    Column("symbol", String(20), ForeignKey("stocks.symbol"), nullable=False),
+    Column("sell_date", Date, nullable=False),  # 必填：決定從哪幾筆買進扣、股利算到哪天
+    Column("price", Numeric(12, 4), nullable=False),  # 每股成交價
+    Column("shares", Integer, nullable=False),  # 股數（賣出當時）
+    Column("fee_mode", String(10), nullable=False),
+    Column("fee_discount", Numeric(5, 4)),
+    Column("min_fee", Numeric(10, 2)),
+    Column("fee", Numeric(14, 2), nullable=False),  # 賣出手續費（元）
+    Column("tax_mode", String(10), nullable=False),
+    Column("tax", Numeric(14, 2), nullable=False),  # 證交稅（元）
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    CheckConstraint("price > 0", name="ck_holding_sales_price"),
+    CheckConstraint("shares > 0", name="ck_holding_sales_shares"),
+    CheckConstraint("fee >= 0", name="ck_holding_sales_fee"),
+    CheckConstraint("tax >= 0", name="ck_holding_sales_tax"),
+    CheckConstraint("min_fee IS NULL OR min_fee >= 0", name="ck_holding_sales_min_fee"),
+    CheckConstraint(
+        "fee_mode IN (" + ", ".join(f"'{mode}'" for mode in HOLDING_FEE_MODES) + ")", name="ck_holding_sales_fee_mode",
+    ),
+    CheckConstraint(
+        "(fee_mode = 'discount') = (fee_discount IS NOT NULL) AND (fee_discount IS NULL OR (fee_discount > 0 AND fee_discount <= 1))",
+        name="ck_holding_sales_fee_discount",
+    ),
+    CheckConstraint(
+        "tax_mode IN (" + ", ".join(f"'{mode}'" for mode in SALE_TAX_MODES) + ")", name="ck_holding_sales_tax_mode",
+    ),
+    Index("ix_holding_sales_user_symbol", "user_id", "symbol"),
 )
 
 # 每日通知（Java 計算並發送，見 stock-api-java 的 NotificationService）。

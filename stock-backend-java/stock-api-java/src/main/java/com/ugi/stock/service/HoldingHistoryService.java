@@ -2,13 +2,15 @@ package com.ugi.stock.service;
 
 import com.ugi.stock.dto.HoldingHistoryResponse;
 import com.ugi.stock.dto.HoldingHistoryResponse.Point;
-import com.ugi.stock.dto.HoldingsResponse.Lot;
 import com.ugi.stock.entity.Holding;
+import com.ugi.stock.entity.HoldingSale;
 import com.ugi.stock.entity.StockAction;
 import com.ugi.stock.entity.StockPrice;
 import com.ugi.stock.repository.HoldingRepository;
+import com.ugi.stock.repository.HoldingSaleRepository;
 import com.ugi.stock.repository.StockPriceRepository;
 import com.ugi.stock.repository.StockPriceRepository.DailyClose;
+import com.ugi.stock.service.LotLedger.LotState;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,7 +32,8 @@ import java.util.stream.Collectors;
  * 庫存資產走勢：把庫存頁「同期比較」的算法逐日套用（見 HoldingService.benchmark），不存快照、每次即時計算。
  * <p>
  * 價格與股利都是目前的基準（之後若有分割、配股、減資，之前的數字已等比例調整），所以一筆買進在任何一天的市值
- * 都是「換算後的股數 × 當天的收盤價」，不必逐日換算股數。賣出成本與庫存頁相同：依整檔目前的持股估算，再依股數分攤。
+ * 都是「換算後的股數 × 當天的收盤價」，不必逐日換算股數。每筆買進在某天的價值由 LotLedger.valueAt 計算
+ * （與同期比較相同）：還持有的部分依整檔「市值 − 賣出成本」按股數分攤，加上已領股利與賣出拿回的金額（視為現金）。
  */
 @Service
 @RequiredArgsConstructor
@@ -40,6 +43,7 @@ public class HoldingHistoryService {
 
     private final HoldingService holdingService;
     private final HoldingRepository holdingRepository;
+    private final HoldingSaleRepository saleRepository;
     private final StockPriceRepository priceRepository;
 
     @Transactional(readOnly = true)
@@ -84,30 +88,22 @@ public class HoldingHistoryService {
         close.keySet().forEach(s -> priced.put(s, true));
         stockCloses.forEach(c -> priced.put(c.getSymbol(), true));
 
+        List<HoldingSale> sales = saleRepository.findByUserIdOrderBySellDateAscIdAsc(userId);
         List<PositionSeries> positions = new ArrayList<>();
         int excluded = 0;
         for (Map.Entry<String, List<Holding>> entry : bySymbol.entrySet()) {
             String symbol = entry.getKey();
-            List<StockAction> actions = holdingService.actions(symbol);
             List<Holding> lots = entry.getValue();
-            PositionSeries p = new PositionSeries(symbol, lots.get(lots.size() - 1), new Dividends(actions));
-            List<Lot> converted = lots.stream().map(h -> holdingService.lot(h, actions, asOf)).toList();
-            p.shares = converted.stream().map(Lot::currentShares).reduce(BigDecimal.ZERO, BigDecimal::add);
-            for (int i = 0; i < lots.size(); i++) {
-                Lot lot = converted.get(i);
-                LocalDate entryDate = lot.buyDate() == null || lot.buyDate().isBefore(etfFirst) ? null : firstOnOrAfter(etfDates, lot.buyDate());
+            LotLedger ledger = holdingService.ledger(symbol, holdings, sales, asOf);
+            PositionSeries p = new PositionSeries(symbol, lots.get(lots.size() - 1), ledger);
+            for (LotState lot : ledger.lots()) {
+                LocalDate buyDate = lot.holding.getBuyDate();
+                LocalDate entryDate = buyDate == null || buyDate.isBefore(etfFirst) ? null : firstOnOrAfter(etfDates, buyDate);
                 if (entryDate == null || !priced.containsKey(symbol)) {
                     excluded++;
                     continue;
                 }
-                LotSeries s = new LotSeries();
-                s.buyDate = lot.buyDate();
-                s.entryDate = entryDate;
-                s.cost = lot.cost();
-                s.share = lot.currentShares().divide(p.shares, MC);
-                s.exactShares = BigDecimal.valueOf(lots.get(i).getShares()).multiply(lot.splitRatio(), MC);
-                s.etfUnits = lot.cost().divide(etfCloseByDate.get(entryDate), MC);
-                p.lots.add(s);
+                p.lots.add(new LotSeries(lot, entryDate, lot.cost.divide(etfCloseByDate.get(entryDate), MC)));
             }
             if (!p.lots.isEmpty()) {
                 positions.add(p);
@@ -119,7 +115,7 @@ public class HoldingHistoryService {
         }
 
         // 走勢的日期：最早一筆納入的庫存買進那天起，庫存的股票或 0050 有行情的交易日，最後一天為 asOf
-        LocalDate start = positions.stream().flatMap(p -> p.lots.stream()).map(s -> s.entryDate).min(LocalDate::compareTo).orElseThrow();
+        LocalDate start = positions.stream().flatMap(p -> p.lots.stream()).map(LotSeries::entryDate).min(LocalDate::compareTo).orElseThrow();
         TreeSet<LocalDate> dates = new TreeSet<>(etfDates);
         stockCloses.forEach(c -> dates.add(c.getTradeDate()));
         dates.add(asOf);
@@ -140,26 +136,26 @@ public class HoldingHistoryService {
             BigDecimal etfValue = BigDecimal.ZERO;
             boolean missing = false;
             for (PositionSeries p : positions) {
+                // 整檔當天收盤的市值 − 賣出成本（與庫存頁相同，依最近一筆的手續費方式估算）
+                BigDecimal shares = p.ledger.positionSharesAt(day);
                 BigDecimal price = close.get(p.symbol);
-                BigDecimal net = null;
-                if (price != null) {
-                    BigDecimal marketValue = p.shares.multiply(price, MC);
+                boolean noPrice = shares.signum() > 0 && price == null;
+                BigDecimal net = BigDecimal.ZERO;
+                if (shares.signum() > 0 && price != null) {
+                    BigDecimal marketValue = shares.multiply(price, MC);
                     net = marketValue.subtract(HoldingService.sellCost(p.symbol, marketValue, p.latest));
                 }
-                BigDecimal dividendsToDay = p.dividends.upTo(day);
                 for (LotSeries s : p.lots) {
                     if (s.entryDate.isAfter(day)) {
                         continue;
                     }
-                    invested = invested.add(s.cost);
+                    invested = invested.add(s.lot.cost);
                     etfValue = etfValue.add(s.etfUnits.multiply(etfClose.add(etfDividendsToDay.subtract(etfDividends.upTo(s.entryDate))), MC));
-                    if (net == null) {
+                    if (noPrice) {
                         missing = true;
-                        continue;
+                    } else {
+                        holdingsValue = holdingsValue.add(p.ledger.valueAt(s.lot, day, net, shares));
                     }
-                    // 已領股利：買進日之後、到當天為止的除息日（與庫存頁相同，依換算後的股數）
-                    BigDecimal dividends = money(dividendsToDay.subtract(p.dividends.upTo(s.buyDate)).multiply(s.exactShares, MC));
-                    holdingsValue = holdingsValue.add(net.multiply(s.share, MC)).add(dividends);
                 }
             }
             points.add(new Point(day, money(invested), missing ? null : money(holdingsValue), money(etfValue)));
@@ -178,7 +174,7 @@ public class HoldingHistoryService {
         return value.setScale(2, RoundingMode.HALF_UP);
     }
 
-    /** 一檔股票的每股現金股利，依除息日累計 */
+    /** 0050 的每股現金股利，依除息日累計 */
     private static final class Dividends {
         private final List<StockAction> cash;
 
@@ -199,28 +195,21 @@ public class HoldingHistoryService {
         }
     }
 
-    /** 一檔股票：賣出成本依整檔目前的持股估算（與庫存頁相同），納入的每筆依股數分攤 */
+    /** 一檔股票：賣出成本依整檔當天的持股估算（與庫存頁相同），納入的每筆依股數分攤 */
     private static final class PositionSeries {
         final String symbol;
         final Holding latest;
-        final Dividends dividends;
+        final LotLedger ledger;
         final List<LotSeries> lots = new ArrayList<>();
-        BigDecimal shares;
 
-        PositionSeries(String symbol, Holding latest, Dividends dividends) {
+        PositionSeries(String symbol, Holding latest, LotLedger ledger) {
             this.symbol = symbol;
             this.latest = latest;
-            this.dividends = dividends;
+            this.ledger = ledger;
         }
     }
 
-    /** 一筆納入的買進 */
-    private static final class LotSeries {
-        LocalDate buyDate;
-        LocalDate entryDate;
-        BigDecimal cost;
-        BigDecimal share;       // 占整檔股數的比例
-        BigDecimal exactShares; // 換算後的股數（未四捨五入，與庫存頁計算股利相同）
-        BigDecimal etfUnits;    // 同樣金額買進 0050 的單位數
+    /** 一筆納入的買進：進場日（0050 的交易日）與同樣金額買進 0050 的單位數 */
+    private record LotSeries(LotState lot, LocalDate entryDate, BigDecimal etfUnits) {
     }
 }

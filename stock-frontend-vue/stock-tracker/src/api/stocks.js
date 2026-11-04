@@ -171,6 +171,20 @@ export function deleteHolding(id) {
   return send('DELETE', `/api/holdings/${encodeURIComponent(id)}`)
 }
 
+// 賣出：body：{ symbol, sellDate, price, shares, feeMode, feeDiscount, minFee, fee, taxMode, tax }；
+// 回傳存好的一筆（含先進先出的分配與已實現損益）。超過當時可賣的股數時回 400 與說明
+export function createSale(body) {
+  return send('POST', '/api/holdings/sales', body)
+}
+
+export function updateSale(id, body) {
+  return send('PUT', `/api/holdings/sales/${encodeURIComponent(id)}`, body)
+}
+
+export function deleteSale(id) {
+  return send('DELETE', `/api/holdings/sales/${encodeURIComponent(id)}`)
+}
+
 // ---- 每日通知（需要登入）----
 
 // { emailEnabled, exDividendDays, maxExDividendDays, entryAlerts, email, riskLevels: { 代號: 代碼 }, riskOptions, weakMarketExtra }

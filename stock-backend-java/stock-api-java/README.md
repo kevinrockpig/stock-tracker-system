@@ -100,10 +100,12 @@ export DB_URL='jdbc:postgresql://<host>:5432/<db>?sslmode=require' DB_USERNAME='
 | `GET /api/paper` | 交易計畫與往後實測：每個觀察中策略的模擬帳戶，包含待執行的計畫（買進候選與放棄價、ATR 停損，賣出與停利線）、當天執行結果、持有中部位（目前價、報酬、市值占比、目前出場線）、已出場交易、每日資金與同期買進持有 / 0050 基準 |
 | `GET /api/me` | 目前的登入狀態（`loginEnabled`、`authenticated`、`email`、`displayName`、`loginUrl`），並寫入 CSRF token cookie |
 | `POST /api/logout` | 登出（需 CSRF token），回 204 |
-| `GET /api/holdings` | **需登入**。自己的庫存與分析：依股票合併的成本、市值、未實現損益（扣賣出手續費與證交稅估算）、已領股利、移動停利線與距離、季線、除權息預告、目前訊號；合計；同期買 0050 比較 |
+| `GET /api/holdings` | **需登入**。自己的庫存與分析：依股票合併的成本、市值、未實現損益（扣賣出手續費與證交稅估算）、已領股利、移動停利線與距離、季線、除權息預告、目前訊號；合計；同期買 0050 比較；已實現損益（`realized`：每筆賣出、已全部賣出的股票、總損益）。賣出依先進先出（與券商相同，沒有買進日期的視為最早）即時分配，不另存；持股的股數與成本只計還沒賣出的部分 |
 | `GET /api/holdings/history` | **需登入**。資產走勢：每個交易日的投入成本、庫存價值（市值 − 賣出成本 + 已領股利）、同期買 0050 的價值；納入的庫存與算法同「同期比較」，最後一天等於其數字。不存快照，每次由買進紀錄、日 K、除權息即時計算 |
 | `POST /api/holdings` | **需登入、CSRF**。新增一筆買進：`symbol`、`buyDate`（選填）、`price`、`shares`、`feeMode`（`actual` / `standard` / `discount`）、`feeDiscount`、`minFee`、`fee`；回 201 與該筆內容（含計算出的手續費） |
-| `PUT /api/holdings/{id}` / `DELETE /api/holdings/{id}` | **需登入、CSRF**。修改 / 刪除自己的一筆；別人的或不存在回 404 |
+| `PUT /api/holdings/{id}` / `DELETE /api/holdings/{id}` | **需登入、CSRF**。修改 / 刪除自己的一筆；別人的或不存在回 404；修改或刪除後會讓之前的賣出超過當時持有的股數時回 400 |
+| `POST /api/holdings/sales` | **需登入、CSRF**。新增一筆賣出：`symbol`、`sellDate`（必填）、`price`、`shares`（賣出當時的股數）、`feeMode` / `feeDiscount` / `minFee` / `fee`（同買進）、`taxMode`（`standard` 依稅率 / `actual`）、`tax`；回 201 與該筆（含先進先出的分配與已實現損益）。超過當時可賣的股數回 400 |
+| `PUT /api/holdings/sales/{id}` / `DELETE /api/holdings/sales/{id}` | **需登入、CSRF**。修改 / 刪除自己的一筆賣出 |
 | `GET /api/stocks/{symbol}/trades?strategy=&exitRule=` | 某檔股票的歷史回測交易（進出場日期、價格、股利、報酬）；`exitRule` 短線為 `hold_5`、`hold_10`、`hold_20`、`trailing_atr`，波段為 `ma60_exit`、`trailing_nocap`；波段策略只搭配波段出場（其他組合回 400） |
 
 ```bash
