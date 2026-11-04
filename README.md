@@ -38,7 +38,7 @@ flowchart LR
 | 2 | Java | IntelliJ 執行 `StockApiJavaApplication` | API 位於 `http://localhost:8081` |
 | 3 | Vue | `cd stock-frontend-vue/stock-tracker && npm run dev` | 開啟 `http://localhost:5173` |
 
-官方開放資料（`official_*` 資料表）另由 GitHub Actions 在私人 repo 每天自動累積，見 [Python README](stock-scraper-python/README.md#雲端每日排程github-actions)。
+Python 每日更新（行情與官方開放資料）也可由 GitHub Actions 在私人 repo 每天自動執行，不需要這台電腦開機，見 [Python README](stock-scraper-python/README.md#雲端每日排程github-actions)。
 
 環境需求：Python 3.11 以上（建議 3.12）、JDK 17 以上、Node.js 20.19 / 22.12 以上（建議 24 LTS）、PostgreSQL（目前使用 Neon）。
 

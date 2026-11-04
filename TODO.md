@@ -8,6 +8,10 @@
    登入狀態改存資料庫（Spring Session JDBC，資料表由 Python 建立；過期 session 每天 15:30 清除一次）、
    根目錄 Dockerfile（白名單 .dockerignore）、回應壓縮、每個 IP 每分鐘 200 個請求；Docker 實測啟動 10 秒、程序約 350 MB
 3. [ ] Python 每日更新改由私人 repo 的 GitHub Actions 執行（與 Mac 排程並行一週再停用 Mac）
+   - [x] 設定檔 `stock-scraper-python/deploy/data-archive-repo/.github/workflows/market-daily.yml`（2026-11-03）：
+     週一到週五 15:40、18:10（備援），`scraper.main` → `scraper.health`，結果寫在執行頁面的 Summary
+   - [ ] 使用者：push 公開 repo（Actions 取出的是 GitHub 上 main 的程式碼）、把設定檔複製到私人 repo、手動執行一次確認
+   - [ ] 並行一週（約到 2026-11-10）：每天確認 Actions 成功、Yahoo 沒有擋連線，之後 `./scripts/install_schedule.sh uninstall` 停用 Mac 排程
 4. [ ] 部署網站（主機待定，見下方）：環境變數、Google 登入的轉回網址、`SESSION_COOKIE_SECURE`、`FRONTEND_URL`、手機實測
    - 部署前 Neon 需先有 `spring_session` 資料表（執行一次 `python -m scraper.main` 或等每日排程）
    - 確認平台代理附上的使用者 IP 能被辨識（否則請求頻率限制變成全站共用），以及 Google 登入轉回 https 網址

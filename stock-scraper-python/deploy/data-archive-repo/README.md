@@ -1,9 +1,9 @@
 # stock-data-archive（私人）
 
-證交所 / 櫃買中心開放資料的每日備份，由 GitHub Actions 自動執行並 commit。
+股票追蹤系統的雲端每日排程（GitHub Actions），以及證交所 / 櫃買中心開放資料的每日備份。
 程式碼在公開 repo [stock-tracker-system](https://github.com/kevinrockpig/stock-tracker-system) 的 `stock-scraper-python/`。
 
-**請保持這個 repo 為私人**：Actions 執行紀錄會出現資料庫主機等資訊。
+**請保持這個 repo 為私人**：Actions 執行紀錄會出現資料庫主機、庫存中的股票代號等資訊。
 
 ## 內容
 
@@ -22,7 +22,23 @@ archive/<來源>/<年>/<日期>.csv.gz
 
 ## 排程
 
-設定檔：[.github/workflows/official-daily.yml](.github/workflows/official-daily.yml)
+| 設定檔 | 內容 | 時間（台灣） |
+|---|---|---|
+| [official-daily.yml](.github/workflows/official-daily.yml) | 官方開放資料累積＋備份檔 commit | 週二到週六 08:17、11:47（備援） |
+| [market-daily.yml](.github/workflows/market-daily.yml) | 觀察名單與庫存中的股票：日 K、指標、策略、回測、交易計畫、參考價位，接著做資料健康檢查 | 週一到週五 15:40、18:10（備援） |
+
+兩者使用相同的 Secrets。GitHub 的排程可能延遲或偶爾被略過，所以各排兩次；重複執行只會更新、不會產生重複資料。
+
+### 行情每日更新（market-daily.yml）
+
+- 取代 Mac 的每日排程：電腦關機也會更新。剛啟用時與 Mac 並行一週（Mac 15:00、這裡 15:40，時間錯開），
+  確認 Yahoo 不會擋 GitHub 的連線、每天都成功後，再在 Mac 執行 `./scripts/install_schedule.sh uninstall` 停用
+- 失敗或資料健康檢查發現異常時，GitHub 寄信通知；檢查結果顯示在該次執行頁面的 Summary
+- 手動執行：Actions → 行情每日更新 → Run workflow
+- 用量：每次約 10 分鐘（Mac 實測主程式約 6 分鐘，另加安裝套件），一天兩次約 440 分鐘 / 月，
+  加上官方資料累積，在 GitHub Free 私人 repo 每月 2,000 分鐘的額度內
+
+### 官方資料每日累積（official-daily.yml）
 
 - 週二到週六，台灣時間 08:17 與 11:47（備援）各執行一次，抓前一個交易日
 - 同時寫入資料庫（Neon）並 commit 備份檔；內容沒變就不會 commit

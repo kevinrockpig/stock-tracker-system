@@ -289,15 +289,23 @@ python -m scraper.official
 
 ### 雲端每日排程（GitHub Actions）
 
-官方資料漏抓就無法補回，因此另外在 GitHub Actions 每天自動執行 `scraper.official`，不依賴這台電腦開機。
-設定檔與說明在 [`deploy/data-archive-repo/`](deploy/data-archive-repo/README.md)，要複製到另一個**私人 repo** 使用：
+GitHub Actions 每天自動執行，不依賴這台電腦開機。設定檔與說明在 [`deploy/data-archive-repo/`](deploy/data-archive-repo/README.md)，
+要複製到另一個**私人 repo** 使用：
+
+| 設定檔 | 執行 | 時間（台灣） |
+|---|---|---|
+| `official-daily.yml` | `scraper.official`（官方資料累積，漏抓就無法補回）＋備份檔 commit | 週二到週六 08:17、11:47（備援） |
+| `market-daily.yml` | `scraper.main`（觀察名單與庫存中的股票）＋`scraper.health`（資料健康檢查） | 週一到週五 15:40、18:10（備援） |
+
 
 - 公開 repo 的 Actions 執行紀錄任何人都看得到，紀錄中會出現資料庫主機等資訊；CSV 備份也不宜公開散布
 - 私人 repo 取出這個公開 repo 的程式碼執行，資料庫連線資訊放在私人 repo 的 Secrets，CSV 備份 commit 回私人 repo
-- 週二到週六台灣時間 08:17、11:47（備援）各執行一次，抓前一個交易日：
-  實測櫃買中心約晚上 11 點半、證交所 OpenAPI 約隔天清晨 5 點才更新，證交所 CSV 則在隔天下午 2 點左右換成下一天
-- 失敗時 GitHub 會寄信通知，可在 Actions 頁面按「Run workflow」重跑，或在本機點一鍵更新補抓
-- 只有 `scraper.official` 在雲端執行；觀察名單（`scraper.main`）仍以手動一鍵更新為主
+- 官方資料在隔天早上抓前一個交易日：實測櫃買中心約晚上 11 點半、證交所 OpenAPI 約隔天清晨 5 點才更新，
+  證交所 CSV 則在隔天下午 2 點左右換成下一天
+- `market-daily.yml` 取代 Mac 的每日排程：先與 Mac 並行一週（時間錯開 40 分鐘），確認 Yahoo 不會擋 GitHub 的連線後，
+  執行 `./scripts/install_schedule.sh uninstall` 停用 Mac 排程；一鍵更新仍可隨時手動使用。
+  同一天重複執行不會重複交易（交易計畫只處理「上次處理日之後」的交易日；兩邊剛好同時寫入同一天時，後寫入的會因唯一鍵失敗並還原）
+- 失敗或資料健康檢查發現異常時 GitHub 會寄信通知，可在 Actions 頁面按「Run workflow」重跑，或在本機點一鍵更新補抓
 
 ## 手動一鍵更新
 
