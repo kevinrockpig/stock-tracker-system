@@ -43,6 +43,9 @@ FLOW_WINDOW = 20
 RANK_WINDOW = 250
 HIGH = 0.8
 SAMPLES = 20000
+PRIMARY = "避險類股合計"
+MARKET = "全市場外資＋投信"
+ROBUSTNESS_SIGNALS = ["trend", "trend&foreign_10d", "trust_streak3"]
 
 
 # ---- (a) 個股訊號 ----
@@ -129,51 +132,58 @@ def chance(observed: float, pool: list[float], count: int, seed: int = 0) -> flo
     return sum(mean(rng.sample(pool, count)) >= observed for _ in range(SAMPLES)) / SAMPLES
 
 
-def event_study(data: cache.MarketData, ext: finmind.External) -> list[str]:
+def event_data(data: cache.MarketData, ext: finmind.External) -> dict:
+    """事件研究的結果（文字輸出與報告共用）。"""
     etf = data.bars[ETF]
     first_flow = min(min(days) for days in ext.flows.values() if days)
     frame = etf[etf["trade_date"] >= first_flow]
     dates, closes = list(frame["trade_date"]), list(frame["close_price"])
     events = drop_events(dates, closes)
     index = {d: i for i, d in enumerate(dates)}
-    lines = [f"期間 {dates[0]} ～ {dates[-1]}，大跌（20 日內從高點跌 ≥10%）{len(events)} 次："]
 
-    groups = {**ext.defensive, "避險類股合計": sorted({s for v in ext.defensive.values() for s in v})}
+    groups = {**ext.defensive, PRIMARY: sorted({s for v in ext.defensive.values() for s in v})}
     ranks = {name: percentiles(rolling_sum(sector_values(ext, dates, members), FLOW_WINDOW), RANK_WINDOW) for name, members in groups.items()}
     market = [(ext.market.get(d, {}).get("foreign", 0.0) + ext.market.get(d, {}).get("trust", 0.0)) for d in dates]
-    ranks["全市場外資＋投信"] = percentiles(rolling_sum(market, FLOW_WINDOW), RANK_WINDOW)
+    ranks[MARKET] = percentiles(rolling_sum(market, FLOW_WINDOW), RANK_WINDOW)
 
-    usable = [(peak, hit, change) for peak, hit, change in events if ranks["避險類股合計"][index[peak]] is not None]
-    for peak, hit, change in events:
-        r = ranks["避險類股合計"][index[peak]]
-        m = ranks["全市場外資＋投信"][index[peak]]
-        lines.append(f"  高點 {peak} → {hit} 跌 {change:.1%}；高點日百分位：避險類股 {'—' if r is None else f'{r:.2f}'}、"
-                     f"全市場 {'—' if m is None else f'{m:.2f}'}")
-    lines.append(f"（前 {RANK_WINDOW + FLOW_WINDOW} 個交易日資料不足，可用事件 {len(usable)} 次）")
-
-    lines.append("主要問題：高點日的避險類股百分位平均是否明顯高於 0.5")
+    rows = [{"peak": peak, "hit": hit, "change": change, "defensive": ranks[PRIMARY][index[peak]], "market": ranks[MARKET][index[peak]]}
+            for peak, hit, change in events]
+    usable = [r["peak"] for r in rows if r["defensive"] is not None]
+    tests = []
     for name, values in ranks.items():
-        at_peak = [values[index[p]] for p, _, _ in usable if values[index[p]] is not None]
+        at_peak = [values[index[p]] for p in usable if values[index[p]] is not None]
         pool = [v for v in values if v is not None]
-        if not at_peak:
-            continue
         observed = mean(at_peak)
-        p_high = chance(observed, pool, len(at_peak))
-        p_low = chance(-observed, [-v for v in pool], len(at_peak))
-        tag = "（主要）" if name == "避險類股合計" else "（次要）"
-        lines.append(f"  {name}{tag}：平均 {observed:.2f}（{len(at_peak)} 次）；偶然這麼高的機率 {p_high:.1%}、這麼低 {p_low:.1%}")
+        tests.append({"name": name, "primary": name == PRIMARY, "members": len(groups.get(name, [])), "mean": observed, "count": len(at_peak),
+                      "chance_high": chance(observed, pool, len(at_peak)), "chance_low": chance(-observed, [-v for v in pool], len(at_peak))})
 
+    values, hits = ranks[PRIMARY], {d for _, d, _ in events}
+
+    def stats(days: list[int], horizon: int) -> dict:
+        valid = [i for i in days if i + horizon < len(closes)]
+        return {"return": mean(closes[i + horizon] / closes[i] - 1 for i in valid),
+                "drop": mean(any(dates[k] in hits for k in range(i + 1, i + horizon + 1)) for i in valid), "days": len(valid)}
+    signal_days = [i for i, v in enumerate(values) if v is not None and v >= HIGH]
+    all_days = [i for i, v in enumerate(values) if v is not None]
+    forward = [{"horizon": h, "signal": stats(signal_days, h), "all": stats(all_days, h)} for h in (20, 40)]
+    return {"start": dates[0], "end": dates[-1], "events": rows, "tests": tests, "forward": forward}
+
+
+def event_study(result: dict) -> list[str]:
+    lines = [f"期間 {result['start']} ～ {result['end']}，大跌（20 日內從高點跌 ≥10%）{len(result['events'])} 次："]
+    fmt = lambda v: "—" if v is None else f"{v:.2f}"  # noqa: E731
+    for r in result["events"]:
+        lines.append(f"  高點 {r['peak']} → {r['hit']} 跌 {r['change']:.1%}；高點日百分位：避險類股 {fmt(r['defensive'])}、全市場 {fmt(r['market'])}")
+    lines.append(f"（前 {RANK_WINDOW + FLOW_WINDOW} 個交易日資料不足，可用事件 {result['tests'][0]['count']} 次）")
+    lines.append("主要問題：高點日的避險類股百分位平均是否明顯高於 0.5")
+    for t in result["tests"]:
+        lines.append(f"  {t['name']}{'（主要）' if t['primary'] else '（次要）'}：平均 {t['mean']:.2f}（{t['count']} 次）；"
+                     f"偶然這麼高的機率 {t['chance_high']:.1%}、這麼低 {t['chance_low']:.1%}")
     lines.append(f"次要：避險類股百分位 ≥ {HIGH} 的日子之後 0050 的表現（對照所有日子）")
-    values = ranks["避險類股合計"]
-    hits = {d for _, d, _ in events}
-    for horizon in (20, 40):
-        def stats(days: list[int]) -> str:
-            forward = [closes[i + horizon] / closes[i] - 1 for i in days if i + horizon < len(closes)]
-            drops = [any(dates[k] in hits for k in range(i + 1, min(i + horizon, len(dates) - 1) + 1)) for i in days if i + horizon < len(closes)]
-            return f"平均報酬 {mean(forward):.2%}、期間內發生大跌 {mean(drops):.1%}（{len(forward)} 天）"
-        signal_days = [i for i, v in enumerate(values) if v is not None and v >= HIGH]
-        all_days = [i for i, v in enumerate(values) if v is not None]
-        lines.append(f"  {horizon} 天：訊號日 {stats(signal_days)}；所有日子 {stats(all_days)}")
+    for f in result["forward"]:
+        s, a = f["signal"], f["all"]
+        lines.append(f"  {f['horizon']} 天：訊號日 平均報酬 {s['return']:.2%}、期間內發生大跌 {s['drop']:.1%}（{s['days']} 天）；"
+                     f"所有日子 平均報酬 {a['return']:.2%}、期間內發生大跌 {a['drop']:.1%}（{a['days']} 天）")
     return lines
 
 
@@ -186,7 +196,7 @@ def lagged(flows: dict[str, dict], k: int) -> dict[str, dict]:
     return out
 
 
-def robustness(data: cache.MarketData, ext: finmind.External) -> list[str]:
+def robustness_data(data: cache.MarketData, ext: finmind.External) -> list[dict]:
     """通過的訊號再檢查：延後 20 / 60 天的安慰劑、隨機排序（10 個種子的中位數）、拿掉漲最多的 5 檔。"""
     base = universe(data)
     variants = {"原始": with_flows(base, ext.flows), "延後20天": with_flows(base, lagged(ext.flows, 20)),
@@ -194,34 +204,42 @@ def robustness(data: cache.MarketData, ext: finmind.External) -> list[str]:
     gains = sorted(((buy_and_hold_return(s.bars) or 0, sym) for sym, s in base.items() if sym != ETF), reverse=True)
     top5 = {sym for _, sym in gains[:5]}
 
-    def calmar(stocks, p) -> dict:
+    def metrics(stocks, p) -> dict:
         r = simulate(stocks, p)
         return summary(r.dates, r.equity)
 
-    lines = ["穩健性（年化 / 回撤 / Calmar）："]
-    for signal in ["trend", "trend&foreign_10d", "trust_streak3"]:
+    rows = []
+    for signal in ROBUSTNESS_SIGNALS:
         for core in (0.5, 0.3):
             for frequency in FREQUENCIES:
                 p = plan(signal, "pct10", core, frequency)
-                parts = [f"{name} {m['cagr']:.1%}/{m['max_drawdown']:.1%}/{m['calmar']:.2f}"
-                         for name, stocks in variants.items() if signal != "trend" or name == "原始"
-                         for m in [calmar(stocks, p)]]
-                random_rank = median(calmar(variants["原始"], replace(p, rank="random", seed=s))["calmar"] for s in range(10))
-                without = calmar({k: v for k, v in variants["原始"].items() if k not in top5}, p)["calmar"]
-                lines.append(f"  {signal:<18} 核心{core:.0%} {frequency:<6} " + "；".join(parts)
-                             + f"；隨機排序中位 {random_rank:.2f}；拿掉前 5 檔 {without:.2f}")
+                rows.append({
+                    "signal": signal, "core": core, "frequency": frequency,
+                    "variants": {name: metrics(stocks, p) for name, stocks in variants.items() if signal != "trend" or name == "原始"},
+                    "random": median(metrics(variants["原始"], replace(p, rank="random", seed=s))["calmar"] for s in range(10)),
+                    "without_top5": metrics({k: v for k, v in variants["原始"].items() if k not in top5}, p)["calmar"],
+                })
+    return rows
+
+
+def robustness(rows: list[dict]) -> list[str]:
+    lines = ["穩健性（年化 / 回撤 / Calmar）："]
+    for r in rows:
+        parts = [f"{name} {m['cagr']:.1%}/{m['max_drawdown']:.1%}/{m['calmar']:.2f}" for name, m in r["variants"].items()]
+        lines.append(f"  {r['signal']:<18} 核心{r['core']:.0%} {r['frequency']:<6} " + "；".join(parts)
+                     + f"；隨機排序中位 {r['random']:.2f}；拿掉前 5 檔 {r['without_top5']:.2f}")
     return lines
 
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
     data, ext = cache.load(), finmind.load()
-    for line in event_study(data, ext):
+    for line in event_study(event_data(data, ext)):
         logger.info(line)
     stocks = with_flows(universe(data), ext.flows)
     for line in summarize(run(stocks, SIGNALS), SIGNALS):
         logger.info(line)
-    for line in robustness(data, ext):
+    for line in robustness(robustness_data(data, ext)):
         logger.info(line)
     return 0
 

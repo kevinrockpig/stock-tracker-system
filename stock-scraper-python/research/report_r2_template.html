@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>策略研究報告 R2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@600;700&display=swap" rel="stylesheet">
+__STYLE__
+<style>
+/* R2 專用：比較矩陣與事件點圖 */
+.matrix td, .matrix th { text-align: center; padding: 6px 8px; }
+.matrix { font-size: 13px; }
+.matrix thead th { border-bottom: 1px solid var(--line); }
+.matrix thead tr + tr th:first-child { text-align: center; position: static; min-width: 0; background: none; }
+.matrix .version-head { color: var(--ink-2); font-weight: 500; font-size: 13px; }
+.matrix th:first-child, .matrix td:first-child { text-align: left; position: sticky; left: 0; background: var(--surface); white-space: normal; min-width: 150px; }
+.matrix tr.base td { color: var(--ink-2); background: var(--bg); }
+.matrix tr.base td:first-child { background: var(--bg); }
+.matrix .cell { display: grid; gap: 0; line-height: 1.35; }
+.matrix .cell .sub { font-size: 11px; }
+.matrix .win { font-weight: 700; }
+.mark-pass::before { content: "✓ "; color: var(--pass); font-weight: 700; }
+.mark-fail::before { content: "✗ "; color: var(--fail); }
+.group-title { color: var(--ink-3); font-size: 12px; font-weight: 500; }
+.dot-legend { display: inline-flex; align-items: center; gap: 6px; }
+.dot-legend svg { width: 12px; height: 12px; }
+.verdict { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 4px; border: 1px solid var(--line); color: var(--ink-2); margin-left: 6px; font-weight: 500; }
+</style>
+</head>
+<body>
+<main id="app">
+  <header>
+    <h1>策略研究報告 R2：月營收、三大法人與大跌前的避險股</h1>
+    <p class="meta" id="meta"></p>
+  </header>
+
+  <section aria-labelledby="s-summary">
+    <h2 id="s-summary">結論</h2>
+    <div class="callout" id="summary"></div>
+    <ul id="findings"></ul>
+  </section>
+
+  <section aria-labelledby="s-method">
+    <h2 id="s-method">資料與比較方式</h2>
+    <ul id="method"></ul>
+  </section>
+
+  <section aria-labelledby="s-revenue">
+    <h2 id="s-revenue">月營收：加進 R1 有沒有更好</h2>
+    <p class="note">每一格是 Calmar（年化報酬 ÷ 最大回撤，越高越好），下方小字為年化／回撤。「✓」代表整段與前後兩段的 Calmar 都高於同一欄的 R1；「相鄰」是把出場改成回落 15% 或 3 倍 ATR、核心比例上下調 20% 時，仍勝過 R1 的比例。</p>
+    <div class="table-wrap"><table class="matrix" id="revenue"></table></div>
+    <p class="note" id="revenue-note"></p>
+  </section>
+
+  <section aria-labelledby="s-flows">
+    <h2 id="s-flows">三大法人：個股的買超訊號</h2>
+    <p class="note">法人買賣超在當天收盤後公布，和價格訊號一樣在隔天開盤進場。表格讀法同上。</p>
+    <div class="table-wrap"><table class="matrix" id="flows"></table></div>
+    <h3>通過的再檢查一次</h3>
+    <p class="note">「延後」是安慰劑測試：故意改用 20 天或 60 天前的法人資料。如果效果真的來自法人買進的時機，延後後應該消失；如果延後後一樣好，代表好成績另有原因。「隨機挑股」是候選太多時改成隨機選（10 次的中位數）。</p>
+    <div class="table-wrap"><table id="robust"></table></div>
+  </section>
+
+  <section aria-labelledby="s-events">
+    <h2 id="s-events">大跌之前，法人是否先買避險類股</h2>
+    <p class="note" id="events-note"></p>
+    <div class="chart" id="events-chart"></div>
+    <div class="table-wrap"><table id="tests"></table></div>
+    <p class="note" id="tests-note"></p>
+    <div class="table-wrap"><table id="forward"></table></div>
+  </section>
+
+  <section aria-labelledby="s-limits">
+    <h2 id="s-limits">限制</h2>
+    <ul id="limits"></ul>
+  </section>
+
+  <section aria-labelledby="s-next">
+    <h2 id="s-next">接下來</h2>
+    <ul>
+      <li>R1 的三個版本（核心為主／均衡／策略為主）維持不變，預設仍是均衡。</li>
+      <li>「外資 10 日買超」列為候選觀察：之後每天累積法人資料，實際走一段時間再決定。</li>
+      <li>網站可以把月營收年增率、法人買賣超當作「參考資訊」顯示在個股頁，但不當作自動買賣訊號（呈現方式與資料授權在 U1 時再確認）。</li>
+      <li>下一步：R2-5「一筆一筆加入個股」。</li>
+      <li>本報告只是回測研究，不構成投資建議；過去的表現不代表未來。</li>
+    </ul>
+  </section>
+</main>
+
+<script>
+const DATA = __REPORT_DATA__;
+
+const LABEL = {
+  trend: "R1 原本（對照）",
+  "trend&rev_yoy3": "R1 訊號＋營收連 3 個月年增",
+  "trend&rev_3m_high": "R1 訊號＋近 3 月年增率創 1 年新高",
+  "trend&rev_avg_high": "R1 訊號＋近 3 月平均營收創 2 年新高",
+  "trend-rev_down": "R1 訊號，但營收衰退時不買",
+  rev_yoy3: "單獨：營收連 3 個月年增",
+  rev_3m_high: "單獨：近 3 月年增率創 1 年新高",
+  rev_avg_high: "單獨：近 3 月平均營收創 2 年新高",
+  "trend&trust_streak3": "R1 訊號＋投信連 3 日買超",
+  "trend&foreign_10d": "R1 訊號＋外資 10 日累計買超",
+  trust_streak3: "單獨：投信連 3 日買超",
+  foreign_10d: "單獨：外資 10 日累計買超",
+};
+const FREQ = { daily: "每天", weekly: "每週" };
+const VERSION = { 0.7: "核心為主", 0.5: "均衡", 0.3: "策略為主" };
+const pct = (v, d = 1) => v == null ? "—" : `${(v * 100).toFixed(d)}%`;
+const signedPct = (v, d = 1) => v == null ? "—" : `${v > 0 ? "+" : ""}${(v * 100).toFixed(d)}%`;
+const num = (v, d = 2) => v == null ? "—" : v.toFixed(d);
+const el = (id) => document.getElementById(id);
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+function settingHead(first, last) {
+  const cores = [...new Set(DATA.settings.map((s) => s.core))];
+  const top = cores.map((c) => `<th colspan="${DATA.settings.filter((s) => s.core === c).length}" class="version-head">${VERSION[c]}<span class="sub">核心 ${Math.round(c * 100)}%</span></th>`).join("");
+  const bottom = DATA.settings.map((s) => `<th>${FREQ[s.frequency]}</th>`).join("");
+  return `<thead><tr><th rowspan="2">${first}</th>${top}<th rowspan="2">${last}<span class="sub">6 格中</span></th></tr><tr>${bottom}</tr></thead>`;
+}
+
+function matrix(id, rows) {
+  const wins = rows.filter((r) => r.signal !== "trend").map((r) => r.cells.filter((c) => c.improves).length);
+  el(id).innerHTML = settingHead("訊號", "勝過") + `<tbody>` + rows.map((r) => {
+    const isBase = r.signal === "trend";
+    const cells = r.cells.map((c) => {
+      const mark = isBase ? "" : (c.improves ? "mark-pass" : "mark-fail");
+      const neighbor = isBase ? "" : `<span class="sub">相鄰 ${c.neighbors[0]}/${c.neighbors[1]}</span>`;
+      return `<td><span class="cell"><span class="${mark} ${c.improves ? "win" : ""}">${num(c.calmar)}</span><span class="sub">${pct(c.cagr)}／${pct(c.max_drawdown)}</span>${neighbor}</span></td>`;
+    }).join("");
+    const count = isBase ? "—" : `${r.cells.filter((c) => c.improves).length}`;
+    return `<tr class="${isBase ? "base" : ""}"><td>${LABEL[r.signal] ?? r.signal}</td>${cells}<td>${count}</td></tr>`;
+  }).join("") + "</tbody>";
+  return { total: wins.length * DATA.settings.length, passed: wins.reduce((a, b) => a + b, 0) };
+}
+
+function render() {
+  const d = DATA.data, ev = DATA.events, p = ev.params;
+  el("meta").textContent = `回測期間 2015-06 ～ ${DATA.asOf}・觀察名單 ${DATA.stocks} 檔・前後段切分日 ${DATA.split}・對照：R1 三個版本`;
+
+  const primary = ev.tests.find((t) => t.primary);
+  const market = ev.tests.find((t) => t.name === "全市場外資＋投信");
+  const robustFor = (signal, core, frequency) => DATA.robustness.find((r) => r.signal === signal && r.core === core && r.frequency === frequency);
+  const fw = robustFor("trend&foreign_10d", 0.5, "weekly"), base = robustFor("trend", 0.5, "weekly");
+  const trust = robustFor("trust_streak3", 0.5, "weekly");
+
+  el("summary").innerHTML = `
+    <h3>R1 的三個版本維持不變</h3>
+    <p>月營收與三大法人的歷史資料都沒有讓 R1 穩定變好；你提出的「大跌前法人先買避險股」也沒有得到證據支持。
+    公開的月營收與法人資料，大部分已經反映在股價上，R1 的「趨勢＋大盤濾網＋停損控管」仍是目前證據最好的做法。</p>`;
+  el("findings").innerHTML = [
+    `<strong>月營收</strong>：單獨當進場訊號全部比 R1 差；加進 R1 當過濾條件多半降低報酬。只有「營收衰退時不買」在每週操作勝過 R1，每天操作沒有，證據弱。`,
+    `<strong>大跌前的避險類股</strong>：${primary.count} 次大跌的高點當天，避險類股的法人買超百分位平均 ${num(primary.mean)}（0.5 為普通），偶然達到的機率 ${pct(primary.chance_high)}，沒有達到事先定的 5%。而且全市場法人買超同樣偏高（${num(market.mean)}）：比較像是「漲到高點前法人什麼都在買」，不是特別買避險股。`,
+    `<strong>投信連 3 日買超</strong>：每週操作的數字看起來不錯，但改用 20 天前的舊資料一樣好（均衡版 Calmar ${num(trust.variants["原始"].calmar)} → ${num(trust.variants["延後20天"].calmar)}），隨機挑股就掉到 ${num(trust.random)}：好成績不是來自投信的時機，是假象。`,
+    `<strong>外資 10 日買超（過濾 R1 訊號）</strong>：每週操作勝過 R1（均衡版 Calmar ${num(fw.variants["原始"].calmar)} 對 ${num(base.variants["原始"].calmar)}），延後 20 天就消失（${num(fw.variants["延後20天"].calmar)}），這是好跡象；但延後 60 天又大致回來（${num(fw.variants["延後60天"].calmar)}），每天操作的前段也沒勝過。可能有一部分只是「外資長期偏好的股票」，列為候選觀察，不改預設。`,
+  ].map((t) => `<li>${t}</li>`).join("");
+
+  el("method").innerHTML = [
+    `資料：月營收 ${d.revenue} 檔、法人買賣超 ${d.flows} 檔（觀察名單＋避險類股）、全市場法人 ${d.marketDays.toLocaleString()} 天，來源 FinMind（原始資料來自證交所）。證交所網站條款不允許未經同意以程式下載、政府開放資料只有最新一期，所以只在本機做研究，網站不轉發原始資料。最新一個月的營收與政府開放資料逐檔比對一致。`,
+    `月營收的時間：一律視為法定申報期限（次月 10 日）之後的第一個交易日才知道。多數公司更早公布，所以只會低估、不會偷看未來。`,
+    `比較方式：R1 的共同規則全部不變（大盤濾網、回落 10% 停利、依停損距離決定部位、最多 10 檔），只換選股訊號；每個新訊號都和同一個版本、同一種操作頻率的 R1 比較。規則與判斷標準在看結果之前就寫進程式。`,
+    `「勝過 R1」：Calmar 在整段、${DATA.split} 以前、以後三段都比 R1 高。只在一部分設定成立的，視為不夠穩定。`,
+  ].map((t) => `<li>${t}</li>`).join("");
+
+  const rv = matrix("revenue", DATA.revenue);
+  el("revenue-note").textContent = `新訊號共 ${rv.total} 格，通過 ${rv.passed} 格。比較的格數越多，靠運氣通過幾格的機會越大；只有在多數版本、兩種頻率都通過，才算穩定。`;
+  matrix("flows", DATA.flows);
+
+  // 穩健性
+  el("robust").innerHTML = `<thead><tr><th>訊號</th><th>版本・頻率</th><th>原始 Calmar</th><th>延後 20 天</th><th>延後 60 天</th><th>隨機挑股</th><th>拿掉漲最多 5 檔</th></tr></thead><tbody>` +
+    DATA.robustness.map((r) => {
+      const v = r.variants;
+      return `<tr class="${r.signal === "trend" ? "" : ""}"><td>${LABEL[r.signal]}</td><td>${VERSION[r.core]}・${FREQ[r.frequency]}</td>
+        <td>${num(v["原始"].calmar)}<span class="sub">${pct(v["原始"].cagr)}／${pct(v["原始"].max_drawdown)}</span></td>
+        <td>${v["延後20天"] ? num(v["延後20天"].calmar) : "—"}</td><td>${v["延後60天"] ? num(v["延後60天"].calmar) : "—"}</td>
+        <td>${num(r.random)}</td><td>${num(r.without_top5)}</td></tr>`;
+    }).join("") + "</tbody>";
+
+  // 事件研究
+  el("events-note").textContent = `大跌的定義：0050 收盤比近 ${p.dropWindow} 個交易日的最高收盤低 ${Math.round(-p.drop * 100)}% 以上（同一次下跌只算一次）。` +
+    `避險類股：${Object.entries(d.defensive).map(([k, v]) => `${k} ${v} 檔`).join("、")}。每一天計算外資＋投信近 ${p.flowWindow} 天的買賣超金額，和自己過去 ${p.rankWindow} 天比較得到百分位（只用過去的資料；0 = 最少、1 = 最多、0.5 = 普通）。圖上是每次大跌的「高點當天」的百分位。`;
+  drawEvents();
+
+  el("tests").innerHTML = `<thead><tr><th>類別</th><th>高點日平均百分位</th><th>偶然這麼高的機率</th><th>判讀</th></tr></thead><tbody>` +
+    ev.tests.map((t) => `<tr class="${t.primary ? "recommended" : ""}"><td>${t.name}${t.primary ? '<span class="tag">主要問題</span>' : ""}</td>
+      <td>${num(t.mean)}（${t.count} 次）</td><td>${pct(t.chance_high)}</td>
+      <td>${t.primary ? (t.chance_high < 0.05 ? "成立" : "未達 5%，不成立") : "僅供參考"}</td></tr>`).join("") + "</tbody>";
+  el("tests-note").textContent = `只有「避險類股合計」是事先決定要檢驗的主要問題；各類股分開看與全市場共 ${ev.tests.length - 1} 組，同時比較這麼多組，出現一兩組低於 5% 很正常，不能當作證據。下表：避險類股百分位 ≥ ${p.high} 的日子之後，0050 的表現。`;
+  el("forward").innerHTML = `<thead><tr><th>之後</th><th>訊號日：0050 平均報酬</th><th>訊號日：期間內發生大跌</th><th>所有日子：平均報酬</th><th>所有日子：發生大跌</th></tr></thead><tbody>` +
+    ev.forward.map((f) => `<tr><td>${f.horizon} 個交易日</td><td>${signedPct(f.signal.return, 2)}<span class="sub">${f.signal.days} 天</span></td><td>${pct(f.signal.drop)}</td>
+      <td>${signedPct(f.all.return, 2)}<span class="sub">${f.all.days} 天</span></td><td>${pct(f.all.drop)}</td></tr>`).join("") + "</tbody>";
+
+  el("limits").innerHTML = [
+    `<strong>事件很少</strong>：11 年只有 ${ev.rows.length} 次符合定義的大跌（可用 ${primary.count} 次），就算真有規律，也很難和運氣分開。`,
+    `<strong>倖存者偏差</strong>：觀察名單是今天的 0050 成分股；避險類股名單是目前仍上市的公司（已下市的不在其中）。`,
+    `<strong>日 K 缺漏</strong>：Yahoo 的日 K 少了 11 個交易日（多為 2016～2018 年的週六補行交易日），這幾天的法人資料沒有計入，影響很小。`,
+    `<strong>多重比較</strong>：月營收與法人共 ${rv.total + DATA.flows.filter((r) => r.signal !== "trend").length * DATA.settings.length} 格比較，零星的 ✓ 不代表有效。`,
+  ].map((t) => `<li>${t}</li>`).join("");
+}
+
+function drawEvents() {
+  const box = el("events-chart");
+  const rows = DATA.events.rows;
+  const width = Math.max(box.clientWidth - 16, 300);
+  const compact = width < 560;
+  const height = compact ? 250 : 300;
+  const m = { top: 14, right: 16, bottom: compact ? 56 : 34, left: 44 };
+  const step = (width - m.left - m.right) / rows.length;
+  const x = (i) => m.left + step * (i + 0.5);
+  const y = (v) => m.top + (1 - v) * (height - m.top - m.bottom);
+  const blue = css("--s-balanced"), orange = css("--s-core"), ink3 = css("--ink-3"), surface = css("--surface");
+  const circle = (cx, cy, fill) => `<circle cx="${cx}" cy="${cy}" r="5.5" fill="${fill}" stroke="${surface}" stroke-width="2"/>`;
+  const diamond = (cx, cy, fill) => `<path d="M${cx},${cy - 6.5}L${cx + 6.5},${cy}L${cx},${cy + 6.5}L${cx - 6.5},${cy}Z" fill="${fill}" stroke="${surface}" stroke-width="2"/>`;
+  let svg = `<svg class="plot" viewBox="0 0 ${width} ${height}" role="img" aria-label="每次大跌高點當天的法人買超百分位">`;
+  for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+    svg += `<line class="grid" x1="${m.left}" x2="${width - m.right}" y1="${y(t)}" y2="${y(t)}" ${t === 0.5 ? `style="stroke:${ink3}" stroke-dasharray="4 3"` : ""}/>`;
+    svg += `<text x="${m.left - 8}" y="${y(t) + 4}" text-anchor="end">${t.toFixed(2)}</text>`;
+  }
+  svg += `<text x="${width - m.right - 4}" y="${y(0.5) - 6}" text-anchor="end">0.5 = 普通</text>`;
+  rows.forEach((r, i) => {
+    if (compact) {
+      svg += `<text x="${x(i)}" y="${height - m.bottom + 12}" text-anchor="end" transform="rotate(-45 ${x(i)} ${height - m.bottom + 12})">${r.peak.slice(0, 7)}</text>`;
+    } else {
+      svg += `<text x="${x(i)}" y="${height - m.bottom + 16}" text-anchor="middle">${r.peak.slice(0, 7)}</text>`;
+    }
+    if (!compact) svg += `<text x="${x(i)}" y="${height - m.bottom + 30}" text-anchor="middle">${pct(r.change, 0)}</text>`;
+    if (r.defensive == null) {
+      svg += `<text x="${x(i)}" y="${y(0.5) + 20}" text-anchor="middle">資料不足</text>`;
+      return;
+    }
+    svg += `<line x1="${x(i)}" x2="${x(i)}" y1="${y(r.defensive)}" y2="${y(r.market)}" stroke="${css("--line")}" stroke-width="2"/>`;
+    svg += diamond(x(i), y(r.market), orange);
+    svg += circle(x(i), y(r.defensive), blue);
+    svg += `<rect x="${x(i) - step / 2}" y="${m.top}" width="${step}" height="${height - m.top - m.bottom}" fill="transparent" data-i="${i}"/>`;
+  });
+  svg += `</svg>`;
+  const legend = `<div class="legend"><span class="dot-legend"><svg viewBox="0 0 12 12">${`<circle cx="6" cy="6" r="5" fill="${blue}"/>`}</svg>避險類股（外資＋投信）</span>
+    <span class="dot-legend"><svg viewBox="0 0 12 12"><path d="M6,0.5L11.5,6L6,11.5L0.5,6Z" fill="${orange}"/></svg>全市場（外資＋投信）</span></div>`;
+  box.innerHTML = legend + svg + `<div class="tooltip" id="events-tip"></div>`;
+  const tip = el("events-tip"), svgEl = box.querySelector("svg.plot");
+  svgEl.querySelectorAll("rect[data-i]").forEach((rect) => {
+    const show = () => {
+      const r = rows[Number(rect.dataset.i)];
+      tip.innerHTML = `<div>高點 ${r.peak}</div><div>${r.hit} 跌 <b>${pct(r.change)}</b></div><div>避險類股　<b>${num(r.defensive)}</b></div><div>全市場　<b>${num(r.market)}</b></div>`;
+      tip.style.display = "block";
+      const b = svgEl.getBoundingClientRect();
+      const left = (x(Number(rect.dataset.i)) / width) * b.width + 16;
+      tip.style.left = `${Math.min(left, box.clientWidth - tip.offsetWidth - 8)}px`;
+      tip.style.top = "40px";
+    };
+    rect.addEventListener("pointermove", show);
+    rect.addEventListener("pointerdown", show);
+    rect.addEventListener("pointerleave", () => { tip.style.display = "none"; });
+  });
+}
+
+render();
+let resizeTimer;
+new ResizeObserver(() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawEvents, 150); }).observe(document.body);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+new MutationObserver(render).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+</script>
+</body>
+</html>
