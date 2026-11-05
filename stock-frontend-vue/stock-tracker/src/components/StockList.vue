@@ -83,10 +83,10 @@ function ariaSort(key) {
 <template>
   <section>
     <div class="toolbar">
+      <!-- 資料每個交易日收盤後更新一次，不提供「重新整理」按鈕 -->
       <p class="note">
-        價格為<strong>日收盤價</strong>（資料來源 yfinance，非即時報價）<template v-if="latestDate">，報價日期 {{ latestDate }}</template>。點選代號或名稱查看 K 線圖。
+        {{ latestDate ? `${latestDate} ` : '' }}收盤價（每個交易日收盤後更新）。點名稱看 K 線圖，按 ＋ 加入庫存。
       </p>
-      <button type="button" :disabled="loading" @click="load">重新整理</button>
     </div>
 
     <div v-if="stocks.length" class="filters">

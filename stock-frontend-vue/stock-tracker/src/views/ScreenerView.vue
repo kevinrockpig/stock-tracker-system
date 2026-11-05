@@ -190,7 +190,11 @@ watch(selectedScope, (scope) => {
 
 <template>
   <section>
-    <h1>策略選股</h1>
+    <h1>選股</h1>
+    <nav class="tabs" aria-label="選股">
+      <RouterLink :to="{ name: 'stocks' }">觀察名單</RouterLink>
+      <RouterLink :to="{ name: 'screener' }" class="active">策略選股</RouterLink>
+    </nav>
 
     <div v-if="strategies.length" class="filters">
       <div class="filter-row" role="group" aria-label="選股策略">

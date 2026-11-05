@@ -43,6 +43,15 @@ public interface StockPriceRepository extends JpaRepository<StockPrice, Long> {
             """, nativeQuery = true)
     List<StockPrice> findLatestTwo(@Param("symbols") Collection<String> symbols);
 
+    // 某日（含）以前往回數第 offset 個交易日的收盤價（offset 0 為最近一天）；計算 N 日漲幅用
+    @Query(value = """
+            SELECT close_price FROM stock_prices
+            WHERE symbol = :symbol AND trade_date <= :date
+            ORDER BY trade_date DESC
+            OFFSET :offset LIMIT 1
+            """, nativeQuery = true)
+    Optional<BigDecimal> findCloseBack(@Param("symbol") String symbol, @Param("date") LocalDate date, @Param("offset") int offset);
+
     // 某日（含）以前最近一個交易日的行情（停牌時沿用前一天）
     Optional<StockPrice> findFirstBySymbolAndTradeDateLessThanEqualOrderByTradeDateDesc(String symbol, LocalDate date);
 

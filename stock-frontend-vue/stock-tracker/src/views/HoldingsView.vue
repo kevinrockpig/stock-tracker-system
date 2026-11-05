@@ -8,7 +8,7 @@ import SaleDialog from '../components/SaleDialog.vue'
 import { auth, logout, markLoggedOut, startLogin, takePendingAdd } from '../utils/auth.js'
 import { formatRate, trendClass } from '../utils/format.js'
 import { groupShortName } from '../utils/groups.js'
-import { FEE_MODES, exTypeText, formatShares, openHoldingForm, ratioToDiscount } from '../utils/holdings.js'
+import { FEE_MODES, exTypeText, formatShares, holdingAlerts, openHoldingForm, ratioToDiscount } from '../utils/holdings.js'
 import { findHashTarget, scrollMotion } from '../utils/scroll.js'
 
 // 登入失敗時 Java 導回 /holdings?login=原因（AllowedUserOidcService）
@@ -111,17 +111,7 @@ function setSort(key) {
 const positions = computed(() => [...(data.value?.positions ?? [])].sort(SORTS[sortKey.value].compare))
 
 // 需要留意：跌破移動停利線、即將除權息
-const attention = computed(() => {
-  const items = []
-  for (const p of data.value?.positions ?? []) {
-    if (p.belowExitLine) items.push({ key: `${p.symbol}-exit`, symbol: p.symbol, name: p.name, kind: 'exit', text: `收盤 ${price(p.price)} 跌破移動停利線 ${price(p.exitLine)}` })
-    if (p.nextExDate) {
-      const cash = p.nextCashDividend ? `，現金股利 ${p.nextCashDividend} 元` : ''
-      items.push({ key: `${p.symbol}-ex`, symbol: p.symbol, name: p.name, kind: 'ex', text: `${p.nextExDate} ${exTypeText(p.nextExType)}${cash}` })
-    }
-  }
-  return items
-})
+const attention = computed(() => holdingAlerts(data.value?.positions))
 
 const hasNotes = (p) => p.belowExitLine || p.belowMa60 || p.nextExDate || p.signals.length > 0
 
@@ -321,7 +311,7 @@ const feeRules = computed(() => data.value?.feeRules)
         <p v-if="message" class="message" :class="{ 'message-error': messageIsError }" :role="messageIsError ? 'alert' : 'status'">{{ message }}</p>
 
         <div v-if="!data.positions.length && !data.realized.count" class="status empty">
-          <p>還沒有庫存。按「新增一筆」，或在股票清單、個股頁按「加入庫存」。</p>
+          <p>還沒有庫存。按「新增一筆」，或在今天、選股、個股頁按「＋」加入。</p>
           <p class="meta">只能加入觀察名單內的股票。</p>
         </div>
 

@@ -1,24 +1,55 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import BackToTop from './components/BackToTop.vue'
 import HoldingDialog from './components/HoldingDialog.vue'
-import { auth, loadAuth, logout } from './utils/auth.js'
+import { auth, loadAuth, logout, startLogin } from './utils/auth.js'
 
-// 個股頁屬於「股票清單」底下，導覽列也標示為目前位置
 const route = useRoute()
 const router = useRouter()
 
+// 主選單 4 項；個股頁、策略選股屬於「選股」，回測比較、交易計畫、說明屬於「研究」（見 router.js 的 meta.section）
+const SECTIONS = [
+  { key: 'today', label: '今天', to: { name: 'today' } },
+  { key: 'holdings', label: '庫存', to: { name: 'holdings' } },
+  { key: 'stocks', label: '選股', to: { name: 'stocks' } },
+  { key: 'research', label: '研究', to: { name: 'research' } },
+]
+const section = computed(() => route.meta.section)
+
 // 登入狀態：導覽列、庫存頁與「加入庫存」按鈕共用
 onMounted(loadAuth)
+
+// 帳號選單（<details>）：換頁、點選單以外的地方或按 Esc 時收起
+const accountMenu = ref(null)
+const closeMenu = () => accountMenu.value?.removeAttribute('open')
+watch(() => route.fullPath, closeMenu)
+function onDocumentClick(event) {
+  if (accountMenu.value && !accountMenu.value.contains(event.target)) closeMenu()
+}
+function onKeydown(event) {
+  if (event.key === 'Escape' && accountMenu.value?.open) {
+    closeMenu()
+    accountMenu.value.querySelector('summary')?.focus()
+  }
+}
+onMounted(() => {
+  document.addEventListener('click', onDocumentClick)
+  document.addEventListener('keydown', onKeydown)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('click', onDocumentClick)
+  document.removeEventListener('keydown', onKeydown)
+})
 
 const loggingOut = ref(false)
 async function doLogout() {
   loggingOut.value = true
   try {
     await logout()
+    closeMenu()
     if (route.name === 'holdings') return // 庫存頁會改顯示登入說明
-    router.push({ name: 'holdings' })
+    router.push({ name: 'today' })
   } catch {
     // 登出失敗（例如網路中斷）：維持登入狀態，使用者可再按一次
   } finally {
@@ -30,16 +61,27 @@ async function doLogout() {
 <template>
   <main class="container">
     <nav class="site-nav" aria-label="主選單">
-      <RouterLink to="/" :class="{ 'router-link-active': route.name === 'stock-detail' }">股票清單</RouterLink>
-      <RouterLink :to="{ name: 'screener' }">策略選股</RouterLink>
-      <RouterLink :to="{ name: 'holdings' }"><span class="wide-only">我的</span>庫存</RouterLink>
-      <RouterLink :to="{ name: 'paper' }">交易計畫</RouterLink>
-      <RouterLink :to="{ name: 'portfolio' }">回測比較</RouterLink>
-      <RouterLink :to="{ name: 'about' }">使用說明</RouterLink>
-      <!-- 帳號：手機版導覽列空間不足，改在庫存頁登入、登出 -->
+      <RouterLink
+        v-for="item in SECTIONS"
+        :key="item.key"
+        :to="item.to"
+        :class="{ current: section === item.key }"
+        :aria-current="section === item.key ? 'page' : undefined"
+        active-class=""
+        exact-active-class=""
+        >{{ item.label }}</RouterLink
+      >
+      <!-- 帳號：未登入顯示「登入」，登入後為選單（Email、登出）；手機也顯示 -->
       <span v-if="auth.loginEnabled" class="account">
-        <button v-if="auth.authenticated" type="button" :title="auth.email" :disabled="loggingOut" @click="doLogout">登出</button>
-        <RouterLink v-else :to="{ name: 'holdings' }" class="login" active-class="" exact-active-class="">登入</RouterLink>
+        <details v-if="auth.authenticated" ref="accountMenu" class="account-menu">
+          <summary :title="auth.email">帳號</summary>
+          <div class="menu" role="menu">
+            <p class="email">{{ auth.email }}</p>
+            <RouterLink :to="{ name: 'holdings', hash: '#holdings-notify' }" role="menuitem">通知設定</RouterLink>
+            <button type="button" role="menuitem" :disabled="loggingOut" @click="doLogout">登出</button>
+          </div>
+        </details>
+        <button v-else type="button" class="login" @click="startLogin()">登入</button>
       </span>
     </nav>
     <RouterView />
@@ -68,66 +110,116 @@ async function doLogout() {
   background: #fff;
 }
 
-.site-nav a {
+.site-nav > a {
   flex-shrink: 0;
-  padding: 4px 10px;
+  padding: 6px 14px;
   border-radius: 6px;
   color: #444;
-  font-size: 14px;
+  font-size: 15px;
   white-space: nowrap;
 }
 
-/* 帳號（登入 / 登出）靠右 */
-.account {
-  margin-left: auto;
-}
-
-.account button,
-.account .login {
-  padding: 3px 10px;
-  border: 1px solid #ced4da;
-  border-radius: 6px;
-  background: #fff;
-  color: #444;
-  font-size: 13px;
-}
-
-/* 手機：縮小間距、「我的庫存」簡稱「庫存」，讓 6 個項目排成一行；更窄的螢幕可左右滑動，不會擠成兩行 */
-@media (max-width: 600px) {
-  .site-nav {
-    gap: 1px;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .site-nav a {
-    padding: 4px 2px;
-    font-size: 13px;
-  }
-
-  .wide-only,
-  .account {
-    display: none;
-  }
-}
-
-/* 375px 以下的手機（例如 iPhone SE）再縮小字級 */
-@media (max-width: 400px) {
-  .site-nav a {
-    font-size: 12px;
-  }
-}
-
-.site-nav a:hover {
+.site-nav > a:hover {
   background: #f1f3f5;
   text-decoration: none;
 }
 
-/* vue-router 會為目前頁面的連結加上 router-link-active */
-.site-nav a.router-link-active {
+/* 目前所在的區塊（同一區塊的子頁也標示，例如個股頁屬於「選股」） */
+.site-nav > a.current {
   background: #1f2328;
   color: #fff;
 }
+
+/* 帳號靠右 */
+.account {
+  margin-left: auto;
+}
+
+.account .login,
+.account summary {
+  padding: 4px 12px;
+  border: 1px solid #ced4da;
+  border-radius: 6px;
+  background: #fff;
+  color: #444;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.account-menu {
+  position: relative;
+}
+
+.account summary {
+  list-style: none;
+}
+
+.account summary::-webkit-details-marker {
+  display: none;
+}
+
+.account summary::after {
+  content: ' ▾';
+  font-size: 11px;
+}
+
+.account .menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  display: grid;
+  gap: 2px;
+  min-width: 200px;
+  padding: 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+}
+
+.account .email {
+  margin: 0 0 4px;
+  padding: 4px 8px 8px;
+  border-bottom: 1px solid #e5e7eb;
+  color: #666;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.account .menu a,
+.account .menu button {
+  padding: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: #1f2328;
+  font-size: 14px;
+  text-align: left;
+}
+
+.account .menu a:hover,
+.account .menu button:hover {
+  background: #f1f3f5;
+  text-decoration: none;
+}
+
+/* 手機：4 項加上帳號一行放得下，字級維持 15px，點擊範圍夠大 */
+@media (max-width: 600px) {
+  .site-nav {
+    gap: 2px;
+  }
+
+  .site-nav > a {
+    padding: 6px 10px;
+  }
+}
+
+@media (max-width: 360px) {
+  .site-nav > a {
+    padding: 6px 7px;
+  }
+}
+
 .site-footer {
   margin-top: 24px;
   padding-top: 12px;

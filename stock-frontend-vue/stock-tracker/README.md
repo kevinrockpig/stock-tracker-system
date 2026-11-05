@@ -2,17 +2,26 @@
 
 資料只透過 Java API 取得，不直接連線資料庫。
 
+主選單（2026-11-05 改版，U1-1）：**今天 / 庫存 / 選股 / 研究**，右上角為帳號（未登入時為「登入」，手機也顯示）。
+個股頁、策略選股屬於「選股」，交易計畫、回測比較、使用說明屬於「研究」（`router.js` 的 `meta.section`）；每一頁有自己的分頁標題。
+
 | 頁面 | 網址 | 使用的 API |
 |---|---|---|
-| 股票清單 | `/?q=南亞&group=CUSTOM&sort=change` | `GET /api/stocks`、`GET /api/groups` |
+| 今天（首頁） | `/` | `GET /api/today`；登入時另有 `GET /api/holdings`（庫存待處理） |
+| 選股：觀察名單 | `/stocks?q=南亞&group=CUSTOM&sort=change` | `GET /api/stocks`、`GET /api/groups` |
+| 研究 | `/research` | （靜態內容：目前採用的規則與研究結論） |
 | 個股 K 線圖 | `/stocks/2330.TW?strategy=ma_bullish&exitRule=hold_5` | `GET /api/stocks/{symbol}/history?from=…`、`GET /api/stocks/{symbol}/levels`、`GET /api/backtests?scope={symbol}`、`GET /api/stocks/{symbol}/trades?strategy=…&exitRule=…` |
-| 策略選股 | `/screener?strategy=high_120&days=10&scope=TW50` | `GET /api/strategies`、`GET /api/screener?strategy=…&days=…`、`GET /api/stocks`、`GET /api/groups`、`GET /api/backtests?scope=…` |
+| 選股：策略選股 | `/screener?strategy=high_120&days=10&scope=TW50` | `GET /api/strategies`、`GET /api/screener?strategy=…&days=…`、`GET /api/stocks`、`GET /api/groups`、`GET /api/backtests?scope=…` |
 | 交易計畫（往後實測） | `/plan?account=high_120/trailing_nocap#plan-positions` | `GET /api/paper` |
 | 我的庫存（需登入） | `/holdings?sort=exit#holding-2330.TW` | `GET /api/me`、`GET/POST /api/holdings`、`GET /api/holdings/history`、`POST /api/holdings/sales`、`PUT/DELETE /api/holdings/sales/{id}`、`PUT/DELETE /api/holdings/{id}`、`POST /api/logout`；每日通知：`GET/PUT /api/notifications/settings`、`PUT /api/notifications/risk-levels/{symbol}`、`GET /api/notifications/preview` |
 | 回測比較（投資組合） | `/portfolio?scope=TW50&sort=cagr&strategy=high_120` | `GET /api/groups`、`GET /api/portfolio-backtests?scope=…` |
 | 使用說明 | `/about#backtest` | `GET /api/strategies`、`GET /api/backtests` |
 
-股票清單：可搜尋代號或名稱、依組別（0050 成分股 / 自選）篩選、依代號 / 漲跌幅 / 成交量排序，條件記在網址；每檔標示所屬組別。
+今天：大盤狀態（0050 是否在 60 日均線之上＝能否買新股票，以圖示＋文字表示）、我的庫存要處理的事（跌破停利線、即將除權息；
+未登入時顯示登入按鈕）、R1 規則的候選（創 120 日新高或季線上揚時 MACD 黃金交叉，依 120 日漲幅排序，附停損參考與「開盤高於多少不買」，
+先顯示 10 檔）。大盤轉弱時候選標示「只供觀察」。
+
+股票清單（選股：觀察名單）：可搜尋代號或名稱、依組別（0050 成分股 / 自選）篩選、依代號 / 漲跌幅 / 成交量排序，條件記在網址；每檔標示所屬組別。
 手機寬度時代號移到名稱下方、隱藏漲跌金額，名稱到漲跌幅不用左右滑動。
 
 策略選股頁：選擇策略（均線多頭排列 / MACD 黃金交叉 / 突破 20 日均線）與區間（最新交易日 / 近 5、10、20 個交易日），

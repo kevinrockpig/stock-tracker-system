@@ -89,6 +89,7 @@ export DB_URL='jdbc:postgresql://<host>:5432/<db>?sslmode=require' DB_USERNAME='
 
 | 方法與路徑 | 說明 |
 |---|---|
+| `GET /api/today` | 今天頁（不需登入）：`asOf`（最新交易日）、`market`（0050 收盤、60 日均線、`canOpen` 是否在均線之上、相差 %）、`candidates`（R1 規則的候選：最新交易日出現「創 120 日新高」或「季線上揚時 MACD 黃金交叉」的觀察名單股票，不含 0050；登入時另含自己的自選，`mine` 為 true；每檔有訊號、近 120 日漲幅 `strength`、停損參考 `stopPrice`＝收盤 × 0.9、`skipAbove`＝收盤 × 1.095；依 `strength` 由高到低）。規則常數在 `PlanRules`，與研究程式一致 |
 | `GET /api/stocks` | 觀察名單與最新日收盤報價（含前一交易日收盤、漲跌、漲跌幅、所屬組別、上市日期） |
 | `GET /api/groups` | 觀察名單的組別（`TW50` 0050 成分股、`CUSTOM` 自選）與股票數 |
 | `GET /api/stocks/{symbol}/history?from=&to=` | 歷史日 K 與當日技術指標（MA、MACD、RSI、KD、ATR14），`from` / `to` 為 `YYYY-MM-DD`，皆可省略 |
@@ -135,7 +136,7 @@ src/main/java/com/ugi/stock/
 ├── controller/   StockController（/api/stocks）、StrategyController（/api/strategies、/api/screener）、
 │                 BacktestController（/api/backtests、/api/stocks/{symbol}/trades）、
 │                 ReferenceLevelController（/api/stocks/{symbol}/levels）、StockGroupController（/api/groups）、
-│                 PortfolioController（/api/portfolio-backtests）、PaperController（/api/paper）、AuthController（/api/me）、HoldingController（/api/holdings）、MyStockController（/api/my-stocks）
+│                 PortfolioController（/api/portfolio-backtests）、PaperController（/api/paper）、AuthController（/api/me）、HoldingController（/api/holdings）、MyStockController（/api/my-stocks）、TodayController（/api/today）
 ├── service/      StockService、StrategyService、BacktestService、PortfolioService、PaperService、ReferenceLevelService、AppUserService、HoldingService、TradingCosts（交易成本）、
 │                 Strategy / ExitRule / Horizon / StockGroup
 │                 （策略、出場規則、短線 / 波段、組別代碼，須與 Python 的 STRATEGIES / EXIT_RULES / STOCK_GROUPS 一致）

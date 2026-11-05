@@ -19,6 +19,7 @@ import {
 } from '../utils/format.js'
 import { groupShortName } from '../utils/groups.js'
 import { levelLines, levelRows } from '../utils/levels.js'
+import { setTitle } from '../utils/title.js'
 
 const props = defineProps({
   symbol: { type: String, required: true },
@@ -60,8 +61,10 @@ async function load() {
   loading.value = true
   error.value = ''
   history.value = null
+  setTitle(props.symbol)
   try {
     history.value = await fetchHistory(props.symbol, { from: monthsBefore(isoDate(new Date()), HISTORY_MONTHS) })
+    setTitle(`${history.value.name} ${props.symbol}`)
   } catch (err) {
     error.value = err.message
   } finally {
@@ -108,12 +111,13 @@ const chartLevelLines = computed(() => (levels.value && showLevels.value ? level
 // 參考價位比 K 線舊：今天的更新程式還沒跑完，或參考價位的計算失敗
 const levelsStale = computed(() => levels.value && latest.value && levels.value.basisDate !== latest.value.tradeDate)
 
-// 返回連結：從股票清單或策略選股頁進來時，回到原頁（保留篩選條件與捲動位置）；直接開啟網址時回到股票清單
+// 返回連結：從今天、選股或策略選股頁進來時，回到原頁（保留篩選條件與捲動位置）；直接開啟網址時回到選股
 const backFrom = computed(() => {
   const back = typeof window !== 'undefined' ? window.history.state?.back : null
   if (typeof back !== 'string') return null
   if (back.startsWith('/screener')) return { path: back, label: '返回策略選股' }
-  if (back === '/' || back.startsWith('/?')) return { path: back, label: '返回股票清單' }
+  if (back === '/stocks' || back.startsWith('/stocks?')) return { path: back, label: '返回選股' }
+  if (back === '/' || back.startsWith('/?')) return { path: back, label: '返回今天' }
   if (back.startsWith('/holdings')) return { path: back, label: '返回我的庫存' }
   return null
 })
@@ -227,7 +231,7 @@ const changePercent = computed(() => {
 
 <template>
   <section>
-    <RouterLink :to="backFrom?.path ?? '/'" class="back" @click="goBack">← {{ backFrom?.label ?? '返回股票清單' }}</RouterLink>
+    <RouterLink :to="backFrom?.path ?? '/stocks'" class="back" @click="goBack">← {{ backFrom?.label ?? '返回選股' }}</RouterLink>
 
     <p v-if="loading" class="status">載入中…（資料庫閒置後首次連線可能需要數秒）</p>
 

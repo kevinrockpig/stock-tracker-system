@@ -75,3 +75,20 @@ export function closeHoldingForm() {
 
 // 除權息類型（Python levels.py：權 / 息 / 權息）
 export const exTypeText = (type) => (type ? `除${type}` : '')
+
+// 庫存中需要留意的事：跌破移動停利線、即將除權息（庫存頁與今天頁共用）
+const alertPrice = new Intl.NumberFormat('zh-TW', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+export function holdingAlerts(positions = []) {
+  const items = []
+  for (const p of positions) {
+    if (p.belowExitLine) {
+      items.push({ key: `${p.symbol}-exit`, symbol: p.symbol, name: p.name, kind: 'exit',
+        text: `收盤 ${alertPrice.format(p.price)} 跌破移動停利線 ${alertPrice.format(p.exitLine)}` })
+    }
+    if (p.nextExDate) {
+      const cash = p.nextCashDividend ? `，現金股利 ${p.nextCashDividend} 元` : ''
+      items.push({ key: `${p.symbol}-ex`, symbol: p.symbol, name: p.name, kind: 'ex', text: `${p.nextExDate} ${exTypeText(p.nextExType)}${cash}` })
+    }
+  }
+  return items
+}
