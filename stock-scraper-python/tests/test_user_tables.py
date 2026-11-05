@@ -99,3 +99,13 @@ def test_notification_tables():
     assert ("user_id", "basis_date", "channel") in _unique_columns(db.notification_log)
     checks = _checks(db.holding_risk_levels)
     assert all(level in checks["ck_holding_risk_levels_level"] for level in ("conservative", "standard", "aggressive"))
+
+
+def test_user_stocks_table():
+    # 我的自選：刪除使用者時一併刪除；同一人同一檔一筆；代號格式與 yfinance 相同；不設外鍵到 stocks（加入時可能還沒有資料）
+    fk = next(iter(db.user_stocks.c.user_id.foreign_keys))
+    assert fk.column.table is db.app_users and fk.ondelete == "CASCADE"
+    assert not db.user_stocks.c.symbol.foreign_keys
+    assert ("user_id", "symbol") in _unique_columns(db.user_stocks)
+    assert set(_checks(db.user_stocks)) == {"ck_user_stocks_symbol"}
+    assert {c.name for c in db.user_stocks.columns if c.nullable} == set()

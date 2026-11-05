@@ -77,6 +77,15 @@ def test_tracked_stocks_adds_held_stocks_after_watchlist():
     assert tracked["0050.TW"] == "元大台灣50"  # 觀察名單的名稱優先
 
 
+def test_tracked_stocks_adds_requested_stocks_last():
+    watchlist = {"2330.TW": "台積電"}
+    held = {"1101.TW": "台泥"}
+    requested = {"2330.TW": "重複", "1101.TW": "重複", "6488.TWO": "環球晶", "00878.TW": "國泰永續高股息"}
+    tracked = tracked_stocks(watchlist, held, requested)
+    assert list(tracked) == ["2330.TW", "1101.TW", "6488.TWO", "00878.TW"]
+    assert tracked["1101.TW"] == "台泥"
+
+
 def test_tracked_stocks_without_holdings():
     watchlist = {"2330.TW": "台積電"}
     assert tracked_stocks(watchlist, {}) == watchlist
@@ -89,3 +98,12 @@ def test_already_current_requires_prices_and_levels_for_every_symbol():
     assert already_current(targets, both, both)
     assert not already_current(targets, {"2330.TW"}, both)  # Yahoo 漏了 0050 今天的日 K → 照常重抓
     assert not already_current(targets, both, {"2330.TW"})  # 參考價位（最後一步）沒完成 → 照常執行
+
+
+def test_exit_code_ignores_requested_failures():
+    from scraper.main import exit_code
+    requested = {"6488.TWO": "環球晶圓"}
+    assert exit_code([], requested) == 0
+    assert exit_code(["6488.TWO"], requested) == 0  # 只有自行加入的股票失敗
+    assert exit_code(["2330.TW"], requested) == 1
+    assert exit_code(["6488.TWO", "回測"], requested) == 1  # 回測等步驟失敗仍是失敗

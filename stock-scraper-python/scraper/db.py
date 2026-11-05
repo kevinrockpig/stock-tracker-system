@@ -15,11 +15,12 @@
   official_corporate_actions  證交所 / 櫃買中心的除權除息預告（每日累積）
 
 使用者資料（本服務只建表，資料列由 Java API 依登入者寫入；本服務不修改，
-只讀取 holdings 的股票代號，讓庫存中的股票從觀察名單移除後仍每日更新）：
+只讀取 holdings 與 user_stocks 的股票代號，讓庫存中與使用者自行加入的股票每日更新）：
   app_users         使用者，一人一筆
   user_identities   登入方式（目前為 Google；日後可加自設密碼），同一使用者可有多種
   holdings          使用者自行填寫的庫存，一筆為一次買進
   holding_sales     賣出紀錄，一筆為一次賣出（從哪幾筆買進扣由 Java 依先進先出計算，不另存）
+  user_stocks       使用者自行加入的股票（我的自選），不限觀察名單
   notification_settings  通知設定（每位使用者一筆）；holding_risk_levels 個股風險設定；notification_log 發送紀錄
   spring_session / spring_session_attributes
                     登入狀態（Java 的 Spring Session JDBC 讀寫；主機重新啟動或部署後不會被登出），
@@ -530,6 +531,21 @@ holding_sales = Table(
     Index("ix_holding_sales_user_symbol", "user_id", "symbol"),
 )
 
+# 使用者自行加入的股票（我的自選，R2-5）：不限觀察名單，加入後由每日更新補抓歷史（日 K、除權息、指標、訊號）。
+# symbol 為 yfinance 代號（上市 .TW、上櫃 .TWO），由 Java 依官方每日資料的市場別決定；
+# 不設外鍵到 stocks：加入時可能還沒有資料，第一次每日更新後才會有 stocks 那一筆
+user_stocks = Table(
+    "user_stocks",
+    metadata,
+    Column("id", BigInteger, Identity(), primary_key=True),
+    Column("user_id", BigInteger, ForeignKey("app_users.id", ondelete="CASCADE"), nullable=False),
+    Column("symbol", String(20), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("user_id", "symbol", name="uq_user_stocks_user_symbol"),
+    CheckConstraint("symbol ~ '^[0-9A-Z]{4,6}[.]TWO?$'", name="ck_user_stocks_symbol"),
+    Index("ix_user_stocks_symbol", "symbol"),
+)
+
 # 每日通知（Java 計算並發送，見 stock-api-java 的 NotificationService）。
 # 通知設定：每位使用者一筆，沒有資料時視為未開啟；Email 寄到登入的 Google email
 NOTIFICATION_RISK_LEVELS = ("conservative", "standard", "aggressive")
@@ -688,6 +704,31 @@ def load_held_stocks(conn: Connection) -> dict[str, str]:
     """庫存中的股票（代號 → 名稱），每日更新時與觀察名單一起抓取。只讀股票代號，不讀使用者與買進內容。"""
     held = select(holdings.c.symbol).distinct().scalar_subquery()
     rows = conn.execute(select(stocks.c.symbol, stocks.c.name).where(stocks.c.symbol.in_(held)).order_by(stocks.c.symbol))
+    return dict(rows.tuples().all())
+
+
+def load_requested_stocks(conn: Connection, exclude, limit: int) -> dict[str, str]:
+    """使用者自行加入、且不在 exclude（觀察名單與庫存）內的股票（代號 → 名稱），依最早加入的時間排序，最多 limit 檔。
+
+    名稱：已有資料的用 stocks 的名稱，否則用官方每日資料最新一天的名稱，都沒有時為代號。只讀代號與加入時間，不讀使用者。
+    """
+    first_added = (
+        select(user_stocks.c.symbol, func.min(user_stocks.c.created_at).label("first_added"))
+        .group_by(user_stocks.c.symbol).subquery()
+    )
+    latest_quote = (
+        select(official_daily_quotes.c.name)
+        .where(official_daily_quotes.c.code == func.split_part(first_added.c.symbol, ".", 1))
+        .order_by(official_daily_quotes.c.trade_date.desc()).limit(1)
+        .scalar_subquery()
+    )
+    rows = conn.execute(
+        select(first_added.c.symbol, func.coalesce(stocks.c.name, latest_quote, first_added.c.symbol))
+        .select_from(first_added.outerjoin(stocks, stocks.c.symbol == first_added.c.symbol))
+        .where(first_added.c.symbol.not_in(list(exclude) or [""]))
+        .order_by(first_added.c.first_added, first_added.c.symbol)
+        .limit(limit)
+    )
     return dict(rows.tuples().all())
 
 

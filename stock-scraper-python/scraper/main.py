@@ -26,6 +26,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from scraper.backtest import log_summary, run_backtest
 from scraper.config import (
     HISTORY_START,
+    MAX_REQUESTED_STOCKS,
     OVERLAP_TRADING_DAYS,
     WATCHLIST,
     ConfigError,
@@ -46,6 +47,7 @@ from scraper.db import (
     init_schema,
     load_closes,
     load_held_stocks,
+    load_requested_stocks,
     backtest_inputs,
     load_dividends,
     load_prices,
@@ -134,12 +136,15 @@ def run(force_full: bool = False, skip_if_current: bool = False) -> int:
     try:
         with engine.connect() as conn:
             held = load_held_stocks(conn)
+            requested = load_requested_stocks(conn, {**WATCHLIST, **held}, MAX_REQUESTED_STOCKS)
     except SQLAlchemyError as exc:
-        logger.warning("無法讀取庫存中的股票，只更新觀察名單：%s", getattr(exc, "orig", exc))
-        held = {}
-    targets = tracked_stocks(WATCHLIST, held)
-    if extra := [symbol for symbol in targets if symbol not in WATCHLIST]:
+        logger.warning("無法讀取庫存中與使用者自行加入的股票，只更新觀察名單：%s", getattr(exc, "orig", exc))
+        held, requested = {}, {}
+    targets = tracked_stocks(WATCHLIST, held, requested)
+    if extra := [symbol for symbol in held if symbol not in WATCHLIST]:
         logger.info("庫存中不在觀察名單的股票 %d 檔，一併更新：%s", len(extra), "、".join(extra))
+    if requested:
+        logger.info("使用者自行加入的股票 %d 檔，一併更新：%s", len(requested), "、".join(requested))
 
     # 備援執行：今天已完整更新過就結束，不重抓、不重算（節省 Neon 的網路傳輸量與運算時數）；
     # 有任何一檔缺少今天的資料（例如 Yahoo 漏了某檔）時照常執行，重新抓取
@@ -274,7 +279,14 @@ def run(force_full: bool = False, skip_if_current: bool = False) -> int:
     engine.dispose()
     failed_symbols = [s for s in failed if s in targets]
     logger.info("完成：成功 %d 檔，失敗 %d 檔 %s", len(targets) - len(failed_symbols), len(failed_symbols), failed or "")
-    return 1 if failed else 0
+    return exit_code(failed, requested)
+
+
+def exit_code(failed: list[str], requested) -> int:
+    """有失敗回傳 1。使用者自行加入的股票（例如之後下市）抓取失敗只警告，不讓每日更新失敗、不影響後續的檢查與通知。"""
+    if only_requested := [s for s in failed if s in requested]:
+        logger.warning("使用者自行加入的股票抓取失敗 %d 檔（不影響結束碼）：%s", len(only_requested), "、".join(only_requested))
+    return 1 if [s for s in failed if s not in requested] else 0
 
 
 # 只檢查最近幾個交易日的缺漏：這段期間的偶發缺漏重新執行通常可以補上；

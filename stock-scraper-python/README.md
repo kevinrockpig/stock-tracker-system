@@ -37,6 +37,11 @@ python -m scraper.health               # 資料健康檢查（唯讀），見「
 
 **庫存中的股票**：從觀察名單移除但仍有人持有的股票，每日照常更新日 K、指標與參考價位（`config.tracked_stocks`），
 庫存頁的價格與停利線才不會停在移除那天；只讀 `holdings` 的股票代號，不讀使用者與買進內容。
+
+**使用者自行加入的股票（我的自選）**：`user_stocks` 中不在觀察名單與庫存的股票也一併更新，第一次會補抓 2015-06-01 起的完整歷史；
+依最早加入的時間排序，全站最多 `MAX_REQUESTED_STOCKS`（200）檔（Neon 免費 1 GB，每檔約 1.1 MB）。
+名稱取自 `stocks`，沒有時取官方每日資料最新一天的名稱。這些股票有日 K、指標、策略訊號與參考價位，但不進回測統計；
+抓取失敗（例如下市）只記錄警告，不影響每日更新的結束碼。沒有人加入也沒有人持有時停止更新，資料保留。
 回測、投資組合回測與交易計畫仍只使用觀察名單。
 
 **上市日期**：Yahoo 的日 K 可能包含上市前的興櫃期間（沒有漲跌幅限制），或合併改制前另一家公司的價格。
@@ -254,10 +259,11 @@ python -m scraper.levels       # 依資料庫最新的日 K 計算（每日 scra
 ## 使用者資料表（庫存管理）
 
 `app_users`（使用者，email 唯一）、`user_identities`（登入方式：目前為 Google，日後可加自設密碼；同一使用者可有多種）、
-`holdings`（使用者自行填寫的庫存，一筆為一次買進）。
+`holdings`（使用者自行填寫的庫存，一筆為一次買進）、`user_stocks`（使用者自行加入的股票，同一人同一檔一筆；
+代號格式與 yfinance 相同，上市 `.TW`、上櫃 `.TWO`；不設外鍵到 `stocks`，加入時可能還沒有資料）。
 
-這三張表**只由本服務建立**（`init_schema`，每次執行 `scraper.main` 時檢查），資料列由 Java API 依登入者寫入；
-本服務只讀取 `holdings` 的股票代號（每日更新庫存中的股票），不讀取其他內容、不修改。
+這些表**只由本服務建立**（`init_schema`，每次執行 `scraper.main` 時檢查），資料列由 Java API 依登入者寫入；
+本服務只讀取 `holdings` 與 `user_stocks` 的股票代號（每日更新庫存中與使用者自行加入的股票），不讀取其他內容、不修改。
 
 `spring_session` / `spring_session_attributes`：Java 的登入狀態（Spring Session JDBC），主機重新啟動或部署後不會被登出。
 結構與 spring-session-jdbc 官方的 `schema-postgresql.sql` 完全相同（2026-11-03 以 `pg_dump` 比對），同樣只由本服務建立。
@@ -301,7 +307,7 @@ GitHub Actions 每天自動執行，不依賴這台電腦開機。設定檔與�
 | 設定檔 | 執行 | 時間（台灣） |
 |---|---|---|
 | `official-daily.yml` | `scraper.official`（官方資料累積，漏抓就無法補回）＋備份檔 commit | 週二到週六 08:17、11:47（備援） |
-| `market-daily.yml` | `scraper.main`（觀察名單與庫存中的股票）＋`scraper.health`（資料健康檢查） | 週一到週五 15:40、18:10（備援） |
+| `market-daily.yml` | `scraper.main`（觀察名單、庫存中與使用者自行加入的股票）＋`scraper.health`（資料健康檢查） | 週一到週五 15:40、18:10（備援） |
 
 
 - 公開 repo 的 Actions 執行紀錄任何人都看得到，紀錄中會出現資料庫主機等資訊；CSV 備份也不宜公開散布
@@ -317,7 +323,7 @@ GitHub Actions 每天自動執行，不依賴這台電腦開機。設定檔與�
 ## 手動一鍵更新
 
 在 Finder 點兩下 `scripts/update-stock-data.command`：開啟終端機視窗顯示進度，結束後顯示成功或失敗，按任意鍵關閉。
-等同於在終端機執行 `./scripts/run_daily.sh`，依序執行 `scraper.main`（觀察名單與庫存中的股票）、`scraper.official`（官方資料累積）與 `scraper.health`（資料健康檢查），
+等同於在終端機執行 `./scripts/run_daily.sh`，依序執行 `scraper.main`（觀察名單、庫存中與使用者自行加入的股票）、`scraper.official`（官方資料累積）與 `scraper.health`（資料健康檢查），
 前兩者互相獨立。輸出同時附加到 `logs/daily-YYYY-MM.log`。
 
 建立桌面捷徑（只需做一次）：

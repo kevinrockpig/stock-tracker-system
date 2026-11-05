@@ -24,8 +24,10 @@ logger = logging.getLogger("scraper.health")
 # 市場交易日：當天有 20 檔以上有日 K（與 verify.sql 查詢 27 相同），避免把只有少數股票的日期當成交易日
 _MARKET_DAYS = "SELECT trade_date FROM stock_prices GROUP BY trade_date HAVING COUNT(*) >= 20"
 
-# 每日更新的股票：觀察名單（有組別）＋庫存中的股票（只讀代號）
-_TRACKED = "SELECT symbol FROM stocks WHERE group_codes IS NOT NULL UNION SELECT symbol FROM holdings"
+# 每日更新的股票：觀察名單（有組別）＋庫存中的股票＋使用者自行加入且已有資料的股票（只讀代號）。
+# 自行加入但還沒有 stocks 那一筆的（等待第一次每日更新，或代號抓不到）不檢查：抓取失敗時每日更新本身會回報
+_TRACKED = ("SELECT symbol FROM stocks WHERE group_codes IS NOT NULL UNION SELECT symbol FROM holdings "
+            "UNION SELECT u.symbol FROM user_stocks u JOIN stocks s ON s.symbol = u.symbol")
 
 DATABASE_LIMIT_BYTES = 1024 ** 3  # Neon 免費方案每個 project 1 GB
 DATABASE_WARN_RATIO = 0.8

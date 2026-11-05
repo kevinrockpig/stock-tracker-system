@@ -64,12 +64,19 @@ def groups_of(symbol: str) -> list[str]:
     return [code for code, group in STOCK_GROUPS.items() if symbol in group["stocks"]]
 
 
-def tracked_stocks(watchlist: dict[str, str], held: dict[str, str]) -> dict[str, str]:
-    """每日更新的股票：觀察名單在前，再加上不在觀察名單內的庫存股票（代號 → 名稱）。
+# 使用者自行加入的股票（user_stocks，不含觀察名單與庫存中的）全站最多幾檔：每檔日 K＋指標＋訊號約 1.1 MB（2026-11-05 Neon 實測），
+# Neon 免費 1 GB；Java 加入時以相同上限檢查（MyStockService.MAX_TOTAL），這裡只是保險
+MAX_REQUESTED_STOCKS = 200
 
-    股票從觀察名單移除（例如 0050 調整成分股）但仍有人持有時繼續更新，庫存的價格與停利線才不會停住。
+
+def tracked_stocks(watchlist: dict[str, str], held: dict[str, str], requested: dict[str, str] | None = None) -> dict[str, str]:
+    """每日更新的股票（代號 → 名稱）：觀察名單在前，再加上不在觀察名單內的庫存股票，最後是使用者自行加入的股票。
+
+    股票從觀察名單移除（例如 0050 調整成分股）但仍有人持有時繼續更新，庫存的價格與停利線才不會停住；
+    沒有人加入也沒有人持有的股票不再更新（資料保留）。
     """
-    return {**watchlist, **{symbol: name for symbol, name in held.items() if symbol not in watchlist}}
+    tracked = {**watchlist, **{symbol: name for symbol, name in held.items() if symbol not in watchlist}}
+    return {**tracked, **{symbol: name for symbol, name in (requested or {}).items() if symbol not in tracked}}
 
 # 增量抓取：資料已存在自己的資料庫，每次只從資料庫最新的日期接著抓，並往前重疊這麼多個交易日：
 # - 比對重疊日期的收盤價，偵測 Yahoo 是否因配股、減資、分割重新調整了歷史價格（見 fetcher.detect_readjustment）
