@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import BackToTop from './components/BackToTop.vue'
 import HoldingDialog from './components/HoldingDialog.vue'
 import { auth, loadAuth, logout, startLogin } from './utils/auth.js'
+import { loadPlan } from './utils/plan.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -17,8 +18,12 @@ const SECTIONS = [
 ]
 const section = computed(() => route.meta.section)
 
-// 登入狀態：導覽列、庫存頁與「加入庫存」按鈕共用
+// 登入狀態：導覽列、庫存頁與「加入庫存」按鈕共用；確定後載入我的計畫（登入時從帳號，否則從瀏覽器）
 onMounted(loadAuth)
+watch(
+  () => [auth.loaded, auth.authenticated],
+  ([loaded]) => loaded && loadPlan(),
+)
 
 // 帳號選單（<details>）：換頁、點選單以外的地方或按 Esc 時收起
 const accountMenu = ref(null)
@@ -77,6 +82,7 @@ async function doLogout() {
           <summary :title="auth.email">帳號</summary>
           <div class="menu" role="menu">
             <p class="email">{{ auth.email }}</p>
+            <RouterLink :to="{ name: 'setup' }" role="menuitem">我的計畫</RouterLink>
             <RouterLink :to="{ name: 'holdings', hash: '#holdings-notify' }" role="menuitem">通知設定</RouterLink>
             <button type="button" role="menuitem" :disabled="loggingOut" @click="doLogout">登出</button>
           </div>

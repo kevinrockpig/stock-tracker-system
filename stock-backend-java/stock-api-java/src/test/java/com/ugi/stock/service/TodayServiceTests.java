@@ -34,7 +34,7 @@ class TodayServiceTests {
 
     @Test
     void marketMatchesSixtyDayAverage() {
-        TodayResponse r = today.today(null);
+        TodayResponse r = today.today(null, "daily");
         LocalDate asOf = jdbc.queryForObject("select max(trade_date) from stock_prices where symbol = '0050.TW'", LocalDate.class);
         assertThat(r.asOf()).isEqualTo(asOf);
         BigDecimal close = jdbc.queryForObject("select close_price from stock_prices where symbol = '0050.TW' and trade_date = ?", BigDecimal.class, asOf);
@@ -49,7 +49,7 @@ class TodayServiceTests {
 
     @Test
     void candidatesMatchSignalsOfLatestDay() {
-        TodayResponse r = today.today(null);
+        TodayResponse r = today.today(null, "daily");
         List<String> expected = jdbc.queryForList("""
                 select distinct g.symbol from strategy_signals g join stocks s on s.symbol = g.symbol
                 where g.trade_date = ? and g.strategy in ('high_120', 'golden_cross_trend')
@@ -76,21 +76,36 @@ class TodayServiceTests {
     }
 
     @Test
+    void weeklyUsesSignalsSinceMonday() {
+        TodayResponse r = today.today(null, "weekly");
+        LocalDate monday = r.asOf().with(java.time.DayOfWeek.MONDAY);
+        assertThat(r.signalsFrom()).isEqualTo(monday);
+        assertThat(r.decisionDay()).isEqualTo(r.asOf().getDayOfWeek() == java.time.DayOfWeek.FRIDAY);
+        List<String> expected = jdbc.queryForList("""
+                select distinct g.symbol from strategy_signals g join stocks s on s.symbol = g.symbol
+                where g.trade_date between ? and ? and g.strategy in ('high_120', 'golden_cross_trend')
+                  and s.group_codes is not null and g.symbol <> '0050.TW'""", String.class, monday, r.asOf());
+        assertThat(r.candidates()).extracting(Candidate::symbol).containsExactlyInAnyOrderElementsOf(expected);
+        assertThat(today.today(null, "daily").decisionDay()).isTrue();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> today.today(null, "monthly")).hasMessageContaining("daily 或 weekly");
+    }
+
+    @Test
     void ownStocksOnlyWhenLoggedIn() {
         long alice = users.recordLogin("google", "test-today-alice", "today.alice@example.com", "Alice");
-        LocalDate asOf = today.today(null).asOf();
+        LocalDate asOf = today.today(null, "daily").asOf();
         jdbc.update("insert into official_daily_quotes (market, code, name, trade_date, source) values ('TWSE', '9910', '豐泰', ?, 'test')", asOf);
         jdbc.update("insert into stocks (symbol, name, currency) values ('9910.TW', '豐泰', 'TWD')");
         jdbc.update("insert into stock_prices (symbol, trade_date, close_price) values ('9910.TW', ?, 190), ('9910.TW', ?, 200)", asOf.minusDays(1), asOf);
         jdbc.update("insert into strategy_signals (symbol, trade_date, strategy) values ('9910.TW', ?, 'high_120')", asOf);
 
-        assertThat(today.today(null).candidates()).extracting(Candidate::symbol).doesNotContain("9910.TW");
-        assertThat(today.today(alice).candidates()).extracting(Candidate::symbol).doesNotContain("9910.TW");
+        assertThat(today.today(null, "daily").candidates()).extracting(Candidate::symbol).doesNotContain("9910.TW");
+        assertThat(today.today(alice, "daily").candidates()).extracting(Candidate::symbol).doesNotContain("9910.TW");
         myStocks.add(alice, "9910");
-        Candidate mine = today.today(alice).candidates().stream().filter(c -> c.symbol().equals("9910.TW")).findFirst().orElseThrow();
+        Candidate mine = today.today(alice, "daily").candidates().stream().filter(c -> c.symbol().equals("9910.TW")).findFirst().orElseThrow();
         assertThat(mine.mine()).isTrue();
         assertThat(mine.strength()).isNull(); // 只有 2 天資料，算不出 120 日漲幅，排在最後
-        List<Candidate> withMine = today.today(alice).candidates();
+        List<Candidate> withMine = today.today(alice, "daily").candidates();
         assertThat(withMine.get(withMine.size() - 1).symbol()).isEqualTo("9910.TW");
     }
 }

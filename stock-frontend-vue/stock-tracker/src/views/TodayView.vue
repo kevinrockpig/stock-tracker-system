@@ -5,7 +5,8 @@ import AddHoldingButton from '../components/AddHoldingButton.vue'
 import { auth, startLogin } from '../utils/auth.js'
 import { formatPercent, formatPrice, trendClass } from '../utils/format.js'
 import { groupShortName } from '../utils/groups.js'
-import { holdingAlerts } from '../utils/holdings.js'
+import { formatShares, holdingAlerts } from '../utils/holdings.js'
+import { CORE_SYMBOL, allocation, frequencyLabel, planState, sharesFor, versionOf } from '../utils/plan.js'
 
 // 今天：收盤後要知道的三件事——大盤能不能開新倉、庫存有沒有要處理的、有哪些候選
 const SIGNAL_LABELS = { high_120: '創 120 日新高', golden_cross_trend: '季線上揚黃金交叉' }
@@ -18,11 +19,14 @@ const holdings = ref(null)
 const holdingsError = ref('')
 const showAll = ref(false)
 
+const plan = computed(() => planState.plan)
+const frequency = computed(() => plan.value?.frequency ?? 'daily')
+
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    today.value = await fetchToday()
+    today.value = await fetchToday(frequency.value)
   } catch (err) {
     error.value = err.message
   } finally {
@@ -43,21 +47,31 @@ async function loadHoldings() {
   }
 }
 
-// 登入狀態確定後才載入（登入時候選包含自己的自選）
+// 登入狀態與我的計畫確定後才載入（登入時候選包含自己的自選；每週操作時看本週的訊號）
 watch(
-  () => [auth.loaded, auth.authenticated],
-  ([loaded]) => {
-    if (!loaded) return
+  () => [auth.loaded, auth.authenticated, planState.loaded],
+  ([authLoaded, , planLoaded]) => {
+    if (!authLoaded || !planLoaded) return
     load()
     loadHoldings()
   },
   { immediate: true },
 )
+watch(frequency, (now, before) => now !== before && planState.loaded && load())
 
 const market = computed(() => today.value?.market)
 const candidates = computed(() => today.value?.candidates ?? [])
 const shown = computed(() => (showAll.value ? candidates.value : candidates.value.slice(0, SHOWN)))
-const alerts = computed(() => holdingAlerts(holdings.value?.positions))
+// 有計畫時 0050 是核心（長期持有）：不套用停利線，改在計畫卡顯示目前市值與目標
+const alerts = computed(() =>
+  holdingAlerts(holdings.value?.positions).filter((a) => !(plan.value && a.kind === 'exit' && a.symbol === CORE_SYMBOL)),
+)
+const money = computed(() => (plan.value ? allocation(plan.value) : null))
+const corePosition = computed(() => holdings.value?.positions.find((p) => p.symbol === CORE_SYMBOL))
+const held = computed(() => new Set((holdings.value?.positions ?? []).map((p) => p.symbol)))
+const wan = (value) => `${(Math.round(value / 1000) / 10).toLocaleString('zh-TW')} 萬`
+const moneyFormat = new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 0 })
+const weekStart = computed(() => today.value?.signalsFrom?.slice(5).replace('-', '/'))
 const exitAlerts = computed(() => alerts.value.filter((a) => a.kind === 'exit'))
 const otherAlerts = computed(() => alerts.value.filter((a) => a.kind !== 'exit'))
 </script>
@@ -69,6 +83,29 @@ const otherAlerts = computed(() => alerts.value.filter((a) => a.kind !== 'exit')
 
     <p v-if="loading && !today" class="meta">載入中…</p>
     <p v-else-if="error" class="error">無法取得資料：{{ error }}</p>
+
+    <!-- 我的計畫：還沒設定時請使用者先設定 -->
+    <article v-if="planState.loaded && !plan" class="card setup-cta" aria-labelledby="today-setup">
+      <h2 id="today-setup">先花 1 分鐘設定你的計畫</h2>
+      <p>回答本金、能承受的虧損、多久看一次，就會建議 0050 與選股的比例，候選也會直接算出可以買幾股。</p>
+      <RouterLink :to="{ name: 'setup' }" class="button primary">開始設定</RouterLink>
+    </article>
+    <article v-else-if="plan" class="card plan" aria-labelledby="today-plan">
+      <h2 id="today-plan">
+        我的計畫：{{ versionOf(plan.version).label }}・{{ frequencyLabel(plan.frequency) }}
+        <RouterLink :to="{ name: 'setup' }" class="edit">調整</RouterLink>
+      </h2>
+      <p>
+        投入 {{ wan(money.invest) }}：0050 {{ wan(money.core) }}、選股 {{ wan(money.satellite) }}（每檔約 {{ wan(money.perPosition) }}，最多 10 檔）<template
+          v-if="money.cash > 0"
+          >，保留現金 {{ wan(money.cash) }}</template
+        >。
+      </p>
+      <p v-if="holdings" class="note">
+        0050 目前{{ corePosition ? `市值 ${wan(corePosition.marketValue)}` : '沒有持有' }}，目標 {{ wan(money.core) }}；
+        0050 長期持有、不套用停利線，每年第一個交易日調回目標比例。
+      </p>
+    </article>
 
     <template v-if="today">
       <!-- 1. 大盤 -->
@@ -124,11 +161,12 @@ const otherAlerts = computed(() => alerts.value.filter((a) => a.kind !== 'exit')
 
       <!-- 3. 候選 -->
       <article class="card" aria-labelledby="today-candidates">
-        <h2 id="today-candidates">今天的候選 {{ candidates.length }} 檔</h2>
+        <h2 id="today-candidates">{{ today.frequency === 'weekly' ? '本週' : '今天' }}的候選 {{ candidates.length }} 檔</h2>
         <p class="note">
-          出現「創 120 日新高」或「季線上揚時 MACD 黃金交叉」的股票，依近 120 日漲幅排序。
-          每檔約投入策略資金的 10%、最多同時 10 檔；買進後從最高收盤回落 10% 就賣出。
+          {{ today.frequency === 'weekly' ? `本週（${weekStart} 起）` : '今天' }}出現「創 120 日新高」或「季線上揚時 MACD 黃金交叉」的股票，依近 120 日漲幅排序。
+          每檔約投入選股資金的 10%、最多同時 10 檔；買進後從最高收盤回落 10% 就賣出。
         </p>
+        <p v-if="!today.decisionDay" class="paused">每週操作：週五收盤後才決定，下週第一個交易日開盤買進；今天先看看就好。</p>
         <p v-if="!market.canOpen" class="paused">大盤轉弱，依規則暫停買新股票，以下只供觀察。</p>
         <p v-if="!candidates.length" class="meta">今天沒有符合條件的股票。</p>
         <ul v-else class="candidates">
@@ -147,9 +185,14 @@ const otherAlerts = computed(() => alerts.value.filter((a) => a.kind !== 'exit')
               <span v-for="s in c.signals" :key="s" class="chip">{{ SIGNAL_LABELS[s] ?? s }}</span>
               <span v-if="c.strength != null" class="strength">120 日 {{ formatPercent(c.strength) }}</span>
             </div>
-            <div class="plan">
-              停損參考 <strong>{{ formatPrice(c.stopPrice) }}</strong>
-              <span class="hint">開盤高於 {{ formatPrice(c.skipAbove) }} 不買</span>
+            <div class="buy">
+              <template v-if="held.has(c.symbol)"><span class="badge">已持有</span></template>
+              <template v-else-if="plan && sharesFor(plan, c.close) > 0">
+                約 <strong>{{ formatShares(sharesFor(plan, c.close)) }}</strong>
+                <span class="hint">約 {{ moneyFormat.format(sharesFor(plan, c.close) * c.close) }} 元</span>
+              </template>
+              <template v-else-if="plan"><span class="hint">每檔金額不足買 1 股</span></template>
+              <span class="hint">停損參考 {{ formatPrice(c.stopPrice) }}・開盤高於 {{ formatPrice(c.skipAbove) }} 不買</span>
             </div>
             <div class="action">
               <AddHoldingButton :stock="{ symbol: c.symbol, name: c.name, closePrice: c.close, tradeDate: today.asOf }" compact />
@@ -159,7 +202,10 @@ const otherAlerts = computed(() => alerts.value.filter((a) => a.kind !== 'exit')
         <button v-if="candidates.length > SHOWN" type="button" class="more" @click="showAll = !showAll">
           {{ showAll ? '只顯示前 10 檔' : `顯示全部 ${candidates.length} 檔` }}
         </button>
-        <p class="note">停損參考以今天收盤價計算；實際以買進價為準，之後隨最高收盤往上移。候選是依規則篩出的結果，不是投資建議。</p>
+        <p class="note">
+          股數與停損參考以今天收盤價計算；實際以買進價為準，停損之後隨最高收盤往上移。<template v-if="!plan">設定計畫後會算出可買幾股。</template>
+          候選是依規則篩出的結果，不是投資建議。
+        </p>
       </article>
     </template>
   </section>
@@ -237,6 +283,31 @@ const otherAlerts = computed(() => alerts.value.filter((a) => a.kind !== 'exit')
   border-radius: 6px;
   background: #0b57d0;
   color: #fff;
+}
+
+.button {
+  display: inline-block;
+  padding: 8px 16px;
+}
+
+.button:hover {
+  text-decoration: none;
+}
+
+.setup-cta {
+  border: 2px solid #0b57d0;
+  background: #f5f9ff;
+}
+
+.plan h2 {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.edit {
+  font-size: 14px;
+  font-weight: 400;
 }
 
 .todo {
@@ -331,7 +402,7 @@ const otherAlerts = computed(() => alerts.value.filter((a) => a.kind !== 'exit')
   white-space: nowrap;
 }
 
-.plan {
+.buy {
   font-size: 14px;
   font-variant-numeric: tabular-nums;
 }
@@ -362,7 +433,7 @@ const otherAlerts = computed(() => alerts.value.filter((a) => a.kind !== 'exit')
   }
 
   .signals,
-  .plan {
+  .buy {
     grid-column: 1;
   }
 

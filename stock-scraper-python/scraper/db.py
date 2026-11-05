@@ -21,6 +21,7 @@
   holdings          使用者自行填寫的庫存，一筆為一次買進
   holding_sales     賣出紀錄，一筆為一次賣出（從哪幾筆買進扣由 Java 依先進先出計算，不另存）
   user_stocks       使用者自行加入的股票（我的自選），不限觀察名單
+  user_plans        我的計畫（首次設定：版本、操作頻率、本金、可承受虧損、投入金額），每位使用者一筆
   notification_settings  通知設定（每位使用者一筆）；holding_risk_levels 個股風險設定；notification_log 發送紀錄
   spring_session / spring_session_attributes
                     登入狀態（Java 的 Spring Session JDBC 讀寫；主機重新啟動或部署後不會被登出），
@@ -544,6 +545,27 @@ user_stocks = Table(
     UniqueConstraint("user_id", "symbol", name="uq_user_stocks_user_symbol"),
     CheckConstraint("symbol ~ '^[0-9A-Z]{4,6}[.]TWO?$'", name="ck_user_stocks_symbol"),
     Index("ix_user_stocks_symbol", "symbol"),
+)
+
+# 我的計畫（U1-2）：首次設定的結果，每位使用者一筆。版本只差核心 0050 的比例（R1 研究，見 research/report.py 的 VERSIONS）：
+# core 核心為主 70%、balanced 均衡 50%、strategy 策略為主 30%；其餘規則相同（Java PlanRules）
+PLAN_VERSIONS = ("core", "balanced", "strategy")
+PLAN_FREQUENCIES = ("daily", "weekly")
+user_plans = Table(
+    "user_plans",
+    metadata,
+    Column("user_id", BigInteger, ForeignKey("app_users.id", ondelete="CASCADE"), primary_key=True),
+    Column("version", String(10), nullable=False),
+    Column("frequency", String(10), nullable=False),
+    Column("capital", Numeric(16, 2), nullable=False),  # 本金（元）
+    Column("max_loss", Numeric(5, 4), nullable=False),  # 可承受的最大虧損（0.35 為 -35%）
+    Column("invest_amount", Numeric(16, 2), nullable=False),  # 實際投入股市的金額（其餘保留現金）
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    CheckConstraint("version IN (" + ", ".join(f"'{v}'" for v in PLAN_VERSIONS) + ")", name="ck_user_plans_version"),
+    CheckConstraint("frequency IN (" + ", ".join(f"'{f}'" for f in PLAN_FREQUENCIES) + ")", name="ck_user_plans_frequency"),
+    CheckConstraint("capital > 0", name="ck_user_plans_capital"),
+    CheckConstraint("max_loss > 0 AND max_loss < 1", name="ck_user_plans_max_loss"),
+    CheckConstraint("invest_amount >= 0 AND invest_amount <= capital", name="ck_user_plans_invest"),
 )
 
 # 每日通知（Java 計算並發送，見 stock-api-java 的 NotificationService）。

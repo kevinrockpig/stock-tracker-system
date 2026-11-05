@@ -109,3 +109,18 @@ def test_user_stocks_table():
     assert ("user_id", "symbol") in _unique_columns(db.user_stocks)
     assert set(_checks(db.user_stocks)) == {"ck_user_stocks_symbol"}
     assert {c.name for c in db.user_stocks.columns if c.nullable} == set()
+
+
+def test_user_plans_table():
+    # 我的計畫：每人一筆、刪除使用者時一併刪除；版本與頻率的代碼與 Java 一致；投入金額不超過本金
+    assert [c.name for c in db.user_plans.primary_key.columns] == ["user_id"]
+    fk = next(iter(db.user_plans.c.user_id.foreign_keys))
+    assert fk.column.table is db.app_users and fk.ondelete == "CASCADE"
+    assert {c.name for c in db.user_plans.columns if c.nullable} == set()
+    checks = _checks(db.user_plans)
+    assert set(checks) == {"ck_user_plans_version", "ck_user_plans_frequency", "ck_user_plans_capital",
+                           "ck_user_plans_max_loss", "ck_user_plans_invest"}
+    for version in ("core", "balanced", "strategy"):
+        assert f"'{version}'" in checks["ck_user_plans_version"]
+    for frequency in ("daily", "weekly"):
+        assert f"'{frequency}'" in checks["ck_user_plans_frequency"]

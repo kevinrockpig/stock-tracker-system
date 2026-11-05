@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -19,8 +20,9 @@ public class TodayController {
 
     private final TodayService todayService;
 
+    // frequency：daily（只看今天的訊號）或 weekly（本週出現過的訊號）
     @GetMapping
-    public TodayResponse today(@AuthenticationPrincipal AppUserPrincipal user) {
-        return todayService.today(user == null ? null : user.getUserId());
+    public TodayResponse today(@AuthenticationPrincipal AppUserPrincipal user, @RequestParam(defaultValue = "daily") String frequency) {
+        return todayService.today(user == null ? null : user.getUserId(), frequency);
     }
 }

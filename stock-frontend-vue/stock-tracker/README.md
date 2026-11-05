@@ -7,7 +7,8 @@
 
 | 頁面 | 網址 | 使用的 API |
 |---|---|---|
-| 今天（首頁） | `/` | `GET /api/today`；登入時另有 `GET /api/holdings`（庫存待處理） |
+| 今天（首頁） | `/` | `GET /api/today?frequency=…`；登入時另有 `GET /api/holdings`（庫存待處理） |
+| 我的計畫（首次設定 / 調整） | `/setup` | 登入時 `GET/PUT /api/my-plan`；未登入時存在瀏覽器（localStorage `stock-tracker:plan`） |
 | 選股：觀察名單 | `/stocks?q=南亞&group=CUSTOM&sort=change` | `GET /api/stocks`、`GET /api/groups` |
 | 研究 | `/research` | （靜態內容：目前採用的規則與研究結論） |
 | 個股 K 線圖 | `/stocks/2330.TW?strategy=ma_bullish&exitRule=hold_5` | `GET /api/stocks/{symbol}/history?from=…`、`GET /api/stocks/{symbol}/levels`、`GET /api/backtests?scope={symbol}`、`GET /api/stocks/{symbol}/trades?strategy=…&exitRule=…` |
@@ -17,9 +18,15 @@
 | 回測比較（投資組合） | `/portfolio?scope=TW50&sort=cagr&strategy=high_120` | `GET /api/groups`、`GET /api/portfolio-backtests?scope=…` |
 | 使用說明 | `/about#backtest` | `GET /api/strategies`、`GET /api/backtests` |
 
-今天：大盤狀態（0050 是否在 60 日均線之上＝能否買新股票，以圖示＋文字表示）、我的庫存要處理的事（跌破停利線、即將除權息；
+我的計畫：三個問題（本金、可承受的最大虧損、每天或每週）→ 建議版本（預設均衡）與投入金額。投入金額的算法：
+「回測最大回落 × 1.5」（壓力假設）超過可承受的虧損時，只投入「本金 × 可承受虧損 ÷ 壓力假設」（萬元以下捨去），其餘保留現金；
+資金分為 0050（核心）與選股，選股每檔約 10%、最多 10 檔（`utils/plan.js`，版本的回測數字取自 R1 研究報告）。
+未登入時存在瀏覽器，登入時若帳號還沒有計畫就把瀏覽器的那份存到帳號（並清除瀏覽器的）。
+
+今天：我的計畫摘要（未設定時為「開始設定」；登入時顯示 0050 目前市值與目標，0050 為核心不套用停利線）、大盤狀態（0050 是否在 60 日均線之上＝能否買新股票，以圖示＋文字表示）、我的庫存要處理的事（跌破停利線、即將除權息；
 未登入時顯示登入按鈕）、R1 規則的候選（創 120 日新高或季線上揚時 MACD 黃金交叉，依 120 日漲幅排序，附停損參考與「開盤高於多少不買」，
-先顯示 10 檔）。大盤轉弱時候選標示「只供觀察」。
+先顯示 10 檔；有計畫時顯示約可買幾股、已持有的標示「已持有」；每週操作時為本週的候選，非週五提示先看看就好）。
+大盤轉弱時候選標示「只供觀察」。
 
 股票清單（選股：觀察名單）：可搜尋代號或名稱、依組別（0050 成分股 / 自選）篩選、依代號 / 漲跌幅 / 成交量排序，條件記在網址；每檔標示所屬組別。
 手機寬度時代號移到名稱下方、隱藏漲跌金額，名稱到漲跌幅不用左右滑動。

@@ -125,9 +125,25 @@ export function fetchPortfolio(scope = 'ALL') {
   return getJson(`/api/portfolio-backtests?${new URLSearchParams({ scope })}`)
 }
 
-// 今天：大盤狀態（0050 對 60 日均線）與 R1 規則的候選；登入時候選包含自己的自選
-export function fetchToday() {
-  return getJson('/api/today')
+// 今天：大盤狀態（0050 對 60 日均線）與 R1 規則的候選；登入時候選包含自己的自選。
+// frequency：daily（今天的訊號）或 weekly（本週出現過的訊號）
+export function fetchToday(frequency = 'daily') {
+  return getJson(`/api/today?${new URLSearchParams({ frequency })}`)
+}
+
+// ---- 我的計畫（需要登入；未登入時存在瀏覽器，見 utils/plan.js）----
+
+// { plan: { version, frequency, capital, maxLoss, investAmount, updatedAt } | null }
+export function fetchMyPlan() {
+  return getJson('/api/my-plan')
+}
+
+export function saveMyPlan(plan) {
+  return send('PUT', '/api/my-plan', plan)
+}
+
+export function deleteMyPlan() {
+  return send('DELETE', '/api/my-plan')
 }
 
 // 交易計畫與往後實測：每個觀察中策略一個模擬帳戶（下一個交易日的計畫、持股、已出場交易、每日資金與基準）

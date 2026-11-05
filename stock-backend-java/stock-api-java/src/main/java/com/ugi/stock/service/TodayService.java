@@ -20,6 +20,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
@@ -32,6 +33,7 @@ import java.util.stream.Collectors;
 /**
  * 「今天」頁：最新交易日收盤後的大盤狀態（0050 對 60 日均線）與 R1 規則的候選（見 PlanRules）。
  * 候選範圍為觀察名單（不含核心 0050），登入時再加上自己的自選；依 120 日漲幅排序。
+ * 每週操作時，本週（週一起）出現過訊號的都算（與研究的 weekly 相同：週五收盤後決定、下週第一個交易日進場）。
  */
 @Service
 @RequiredArgsConstructor
@@ -46,11 +48,17 @@ public class TodayService {
     private final UserStockRepository userStockRepository;
     private final StockService stockService;
 
-    public TodayResponse today(Long userId) {
+    public TodayResponse today(Long userId, String frequency) {
+        if (!PlanRules.FREQUENCIES.contains(frequency)) {
+            throw HoldingService.badRequest("frequency 必須是 daily 或 weekly");
+        }
         StockPrice core = priceRepository.findFirstBySymbolAndTradeDateLessThanEqualOrderByTradeDateDesc(PlanRules.CORE_SYMBOL, LocalDate.of(9999, 12, 31))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "尚無 0050 的行情資料"));
         LocalDate asOf = core.getTradeDate();
-        return new TodayResponse(asOf, market(core), candidates(asOf, userId));
+        boolean weekly = frequency.equals("weekly");
+        LocalDate from = weekly ? asOf.with(DayOfWeek.MONDAY) : asOf;
+        boolean decisionDay = !weekly || asOf.getDayOfWeek() == DayOfWeek.FRIDAY;
+        return new TodayResponse(asOf, frequency, from, decisionDay, market(core), candidates(from, asOf, userId));
     }
 
     private Market market(StockPrice core) {
@@ -64,10 +72,10 @@ public class TodayService {
         return new Market(core.getSymbol(), core.getClosePrice(), ma60.setScale(2, RoundingMode.HALF_UP), core.getClosePrice().compareTo(ma60) >= 0, gap);
     }
 
-    private List<Candidate> candidates(LocalDate asOf, Long userId) {
+    private List<Candidate> candidates(LocalDate from, LocalDate asOf, Long userId) {
         Map<String, Set<String>> signals = new TreeMap<>();
         for (Strategy strategy : PlanRules.SIGNALS) {
-            for (StrategySignal s : signalRepository.findByStrategyAndTradeDateBetween(strategy.code(), asOf, asOf)) {
+            for (StrategySignal s : signalRepository.findByStrategyAndTradeDateBetween(strategy.code(), from, asOf)) {
                 signals.computeIfAbsent(s.getSymbol(), k -> new LinkedHashSet<>()).add(strategy.code());
             }
         }

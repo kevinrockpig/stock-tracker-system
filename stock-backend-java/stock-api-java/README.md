@@ -45,7 +45,7 @@ Spring Boot RESTful API：從 PostgreSQL（Neon）讀取 Python 服務寫入的�
   升級 Spring Security 的版本後，舊的 session 可能無法讀回，屆時清空 `spring_session` 即可（使用者重新登入）
 - 寫入請求（POST / PUT / DELETE，含 `POST /api/logout`）需附 CSRF token：`GET /api/me` 會寫入 `XSRF-TOKEN` cookie，
   前端把它的值放進 `X-XSRF-TOKEN` 標頭
-- 既有 API 維持公開；`/api/holdings/**`、`/api/my-stocks/**`、`/api/notifications/**` 需要登入，未登入回 401
+- 既有 API 維持公開；`/api/holdings/**`、`/api/my-stocks/**`、`/api/my-plan`、`/api/notifications/**` 需要登入，未登入回 401
 
 ## 庫存（holdings）
 
@@ -89,7 +89,7 @@ export DB_URL='jdbc:postgresql://<host>:5432/<db>?sslmode=require' DB_USERNAME='
 
 | 方法與路徑 | 說明 |
 |---|---|
-| `GET /api/today` | 今天頁（不需登入）：`asOf`（最新交易日）、`market`（0050 收盤、60 日均線、`canOpen` 是否在均線之上、相差 %）、`candidates`（R1 規則的候選：最新交易日出現「創 120 日新高」或「季線上揚時 MACD 黃金交叉」的觀察名單股票，不含 0050；登入時另含自己的自選，`mine` 為 true；每檔有訊號、近 120 日漲幅 `strength`、停損參考 `stopPrice`＝收盤 × 0.9、`skipAbove`＝收盤 × 1.095；依 `strength` 由高到低）。規則常數在 `PlanRules`，與研究程式一致 |
+| `GET /api/today?frequency=daily` | 今天頁（不需登入）：`frequency` 為 `daily`（只看今天的訊號，預設）或 `weekly`（本週一起出現過的訊號，`signalsFrom` 為本週一，`decisionDay` 表示今天是否為週五）；`asOf`（最新交易日）、`market`（0050 收盤、60 日均線、`canOpen` 是否在均線之上、相差 %）、`candidates`（R1 規則的候選：最新交易日出現「創 120 日新高」或「季線上揚時 MACD 黃金交叉」的觀察名單股票，不含 0050；登入時另含自己的自選，`mine` 為 true；每檔有訊號、近 120 日漲幅 `strength`、停損參考 `stopPrice`＝收盤 × 0.9、`skipAbove`＝收盤 × 1.095；依 `strength` 由高到低）。規則常數在 `PlanRules`，與研究程式一致 |
 | `GET /api/stocks` | 觀察名單與最新日收盤報價（含前一交易日收盤、漲跌、漲跌幅、所屬組別、上市日期） |
 | `GET /api/groups` | 觀察名單的組別（`TW50` 0050 成分股、`CUSTOM` 自選）與股票數 |
 | `GET /api/stocks/{symbol}/history?from=&to=` | 歷史日 K 與當日技術指標（MA、MACD、RSI、KD、ATR14），`from` / `to` 為 `YYYY-MM-DD`，皆可省略 |
@@ -109,6 +109,7 @@ export DB_URL='jdbc:postgresql://<host>:5432/<db>?sslmode=require' DB_USERNAME='
 | `PUT /api/holdings/sales/{id}` / `DELETE /api/holdings/sales/{id}` | **需登入、CSRF**。修改 / 刪除自己的一筆賣出 |
 | `GET /api/my-stocks` | **需登入**。我的自選（自行加入、不限觀察名單的股票），依加入時間排序：`symbol`、`name`、`addedAt`、`ready`（是否已有資料；剛加入的要等下一次每日更新）、`watchlist`（是否也在觀察名單）、`quote`（格式同 `GET /api/stocks`，沒有資料時為 null）；`limit` 為每人上限 |
 | `POST /api/my-stocks` | **需登入、CSRF**。加入一檔：`code`（不含 .TW / .TWO，例如 `6488`、`00878`）；以官方每日資料（最近 7 天）確認是目前上市、上櫃的股票或 ETF，並決定代號為 `.TW` 或 `.TWO`。每人最多 30 檔；全站自行加入、不在觀察名單的股票最多 200 檔（與 Python 的 `MAX_REQUESTED_STOCKS` 相同，已有人加入或在觀察名單的不受限）；格式錯誤、查不到、重複或超過上限回 400。下一次每日更新後就有 K 線、指標、參考價位，也可以加入庫存 |
+| `GET /api/my-plan` / `PUT /api/my-plan` / `DELETE /api/my-plan` | **需登入；PUT、DELETE 需 CSRF**。我的計畫（每人一筆）：`version`（`core` / `balanced` / `strategy`）、`frequency`（`daily` / `weekly`）、`capital`（1 萬到 100 億的整數元）、`maxLoss`（0.05～0.8）、`investAmount`（0 到本金的整數元）；GET 沒有設定時 `plan` 為 null。建議怎麼算在前端（`utils/plan.js`），這裡只檢查與保存 |
 | `DELETE /api/my-stocks/{symbol}` | **需登入、CSRF**。移除自己的一檔（例如 `6488.TWO`）；不存在回 404。沒有人加入也沒有人持有的股票，每日更新就不再抓（資料保留） |
 | `GET /api/stocks/{symbol}/trades?strategy=&exitRule=` | 某檔股票的歷史回測交易（進出場日期、價格、股利、報酬）；`exitRule` 短線為 `hold_5`、`hold_10`、`hold_20`、`trailing_atr`，波段為 `ma60_exit`、`trailing_nocap`；波段策略只搭配波段出場（其他組合回 400） |
 
@@ -136,7 +137,7 @@ src/main/java/com/ugi/stock/
 ├── controller/   StockController（/api/stocks）、StrategyController（/api/strategies、/api/screener）、
 │                 BacktestController（/api/backtests、/api/stocks/{symbol}/trades）、
 │                 ReferenceLevelController（/api/stocks/{symbol}/levels）、StockGroupController（/api/groups）、
-│                 PortfolioController（/api/portfolio-backtests）、PaperController（/api/paper）、AuthController（/api/me）、HoldingController（/api/holdings）、MyStockController（/api/my-stocks）、TodayController（/api/today）
+│                 PortfolioController（/api/portfolio-backtests）、PaperController（/api/paper）、AuthController（/api/me）、HoldingController（/api/holdings）、MyStockController（/api/my-stocks）、TodayController（/api/today）、MyPlanController（/api/my-plan）
 ├── service/      StockService、StrategyService、BacktestService、PortfolioService、PaperService、ReferenceLevelService、AppUserService、HoldingService、TradingCosts（交易成本）、
 │                 Strategy / ExitRule / Horizon / StockGroup
 │                 （策略、出場規則、短線 / 波段、組別代碼，須與 Python 的 STRATEGIES / EXIT_RULES / STOCK_GROUPS 一致）

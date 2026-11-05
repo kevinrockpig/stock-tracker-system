@@ -2,6 +2,8 @@ package com.ugi.stock.service;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * R1 研究得出的共同規則（2026-11-05，見 stock-scraper-python/research 的 simulator.py、report.py 與 TODO.md 的 R1）。
@@ -25,6 +27,11 @@ public final class PlanRules {
     public static final BigDecimal RISK_PER_TRADE = new BigDecimal("0.01");
     public static final BigDecimal MAX_WEIGHT = new BigDecimal("0.20");
     public static final int SLOTS = 10;
+
+    // 版本代碼 → 核心 0050 的比例（核心為主 / 均衡 / 策略為主），與 Python db.PLAN_VERSIONS、research/report.py 的 VERSIONS 一致
+    public static final Map<String, BigDecimal> VERSIONS = Map.of(
+            "core", new BigDecimal("0.7"), "balanced", new BigDecimal("0.5"), "strategy", new BigDecimal("0.3"));
+    public static final Set<String> FREQUENCIES = Set.of("daily", "weekly");
 
     private PlanRules() {
     }

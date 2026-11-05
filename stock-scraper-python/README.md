@@ -260,7 +260,8 @@ python -m scraper.levels       # 依資料庫最新的日 K 計算（每日 scra
 
 `app_users`（使用者，email 唯一）、`user_identities`（登入方式：目前為 Google，日後可加自設密碼；同一使用者可有多種）、
 `holdings`（使用者自行填寫的庫存，一筆為一次買進）、`user_stocks`（使用者自行加入的股票，同一人同一檔一筆；
-代號格式與 yfinance 相同，上市 `.TW`、上櫃 `.TWO`；不設外鍵到 `stocks`，加入時可能還沒有資料）。
+代號格式與 yfinance 相同，上市 `.TW`、上櫃 `.TWO`；不設外鍵到 `stocks`，加入時可能還沒有資料）、
+`user_plans`（我的計畫：版本 `core` / `balanced` / `strategy`、操作頻率 `daily` / `weekly`、本金、可承受的最大虧損、投入金額，每人一筆）。
 
 這些表**只由本服務建立**（`init_schema`，每次執行 `scraper.main` 時檢查），資料列由 Java API 依登入者寫入；
 本服務只讀取 `holdings` 與 `user_stocks` 的股票代號（每日更新庫存中與使用者自行加入的股票），不讀取其他內容、不修改。

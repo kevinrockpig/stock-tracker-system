@@ -26,6 +26,8 @@ const router = createRouter({
   routes: [
     // 今天：大盤狀態、庫存待處理、R1 規則的候選（2026-11-05 起的首頁）
     { path: '/', name: 'today', component: TodayView, meta: { title: '今天', section: 'today' } },
+    // 我的計畫：首次設定與調整（未登入也能用，存在瀏覽器）
+    { path: '/setup', name: 'setup', component: () => import('./views/SetupView.vue'), meta: { title: '我的計畫', section: 'today' } },
     // 選股：觀察名單與搜尋（U1-3 會與策略選股、我的自選合併）
     { path: '/stocks', name: 'stocks', component: HomeView, meta: { title: '選股', section: 'stocks' } },
     // 例如 /screener?strategy=golden_cross&days=10；選擇記錄在網址上，可分享、可用上一頁返回

@@ -42,7 +42,7 @@ public class SecurityConfig {
                 .cors(Customizer.withDefaults()) // 沿用各 Controller 的 @CrossOrigin 設定
                 .csrf(csrf -> csrf.spa())
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/holdings", "/api/holdings/**", "/api/my-stocks", "/api/my-stocks/**", "/api/notifications/**").authenticated()
+                        .requestMatchers("/api/holdings", "/api/holdings/**", "/api/my-stocks", "/api/my-stocks/**", "/api/my-plan", "/api/notifications/**").authenticated()
                         .anyRequest().permitAll())
                 .exceptionHandling(e -> e.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
                 .logout(logout -> logout
