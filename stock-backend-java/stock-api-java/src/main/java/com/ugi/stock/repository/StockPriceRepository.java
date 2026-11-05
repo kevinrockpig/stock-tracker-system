@@ -30,6 +30,19 @@ public interface StockPriceRepository extends JpaRepository<StockPrice, Long> {
             """, nativeQuery = true)
     List<StockPrice> findLatestTwoForWatchlist();
 
+    // 指定股票最新的兩個交易日（我的自選用，寫法同上）
+    @Query(value = """
+            SELECT p.* FROM stocks s
+            CROSS JOIN LATERAL (
+                SELECT * FROM stock_prices sp
+                WHERE sp.symbol = s.symbol
+                ORDER BY sp.trade_date DESC
+                LIMIT 2
+            ) p
+            WHERE s.symbol IN (:symbols)
+            """, nativeQuery = true)
+    List<StockPrice> findLatestTwo(@Param("symbols") Collection<String> symbols);
+
     // 某日（含）以前最近一個交易日的行情（停牌時沿用前一天）
     Optional<StockPrice> findFirstBySymbolAndTradeDateLessThanEqualOrderByTradeDateDesc(String symbol, LocalDate date);
 

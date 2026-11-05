@@ -27,6 +27,7 @@ import com.ugi.stock.repository.StockIndicatorRepository;
 import com.ugi.stock.repository.StockPriceRepository;
 import com.ugi.stock.repository.StockRepository;
 import com.ugi.stock.repository.StrategySignalRepository;
+import com.ugi.stock.repository.UserStockRepository;
 import com.ugi.stock.service.LotLedger.LotState;
 import com.ugi.stock.service.LotLedger.SaleState;
 import jakarta.persistence.EntityManager;
@@ -88,6 +89,7 @@ public class HoldingService {
     private final StockActionRepository actionRepository;
     private final ReferenceLevelRepository levelRepository;
     private final StrategySignalRepository signalRepository;
+    private final UserStockRepository userStockRepository;
 
     // ---- 新增 / 修改 / 刪除 ----
 
@@ -164,10 +166,12 @@ public class HoldingService {
             throw badRequest("缺少庫存內容");
         }
         String symbol = symbol(request.symbol());
-        // 新增須在觀察名單內；已從觀察名單移除的股票仍可修改原本那筆（Python 每日更新會繼續抓庫存中的股票）
+        // 新增須在觀察名單內，或是自己的自選中已有資料的股票；已從觀察名單（或自選）移除的股票仍可修改原本那筆
+        // （Python 每日更新會繼續抓庫存中的股票）
         boolean sameSymbol = symbol.equals(holding.getSymbol());
-        Stock stock = stockRepository.findById(symbol).filter(s -> s.getGroupCodes() != null || sameSymbol)
-                .orElseThrow(() -> badRequest("股票 " + symbol + " 不在觀察名單內"));
+        Stock stock = stockRepository.findById(symbol)
+                .filter(s -> s.getGroupCodes() != null || sameSymbol || userStockRepository.existsByUserIdAndSymbol(holding.getUserId(), symbol))
+                .orElseThrow(() -> badRequest("股票 " + symbol + " 不在觀察名單或我的自選內（剛加入自選的股票要等下一次每日更新有資料後才能加入庫存）"));
 
         BigDecimal price = checkPrice(request.price());
         int shares = checkShares(request.shares());

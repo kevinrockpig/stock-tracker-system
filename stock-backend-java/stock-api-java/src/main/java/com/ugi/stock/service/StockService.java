@@ -22,6 +22,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -54,6 +55,20 @@ public class StockService {
         return stockRepository.findByGroupCodesIsNotNull(Sort.by("symbol")).stream()
                 .map(stock -> toLatestQuote(stock, recentBySymbol.getOrDefault(stock.getSymbol(), List.of())))
                 .toList();
+    }
+
+    /**
+     * 指定股票的最新報價（代號 → 報價），只包含已有 stocks 資料的；我的自選使用。
+     */
+    public Map<String, StockQuoteResponse> getLatestQuotes(Collection<String> symbols) {
+        if (symbols.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, List<StockPrice>> recentBySymbol = stockPriceRepository.findLatestTwo(symbols).stream()
+                .sorted(Comparator.comparing(StockPrice::getTradeDate).reversed())
+                .collect(Collectors.groupingBy(StockPrice::getSymbol));
+        return stockRepository.findAllById(symbols).stream().collect(Collectors.toMap(Stock::getSymbol,
+                stock -> toLatestQuote(stock, recentBySymbol.getOrDefault(stock.getSymbol(), List.of()))));
     }
 
     public List<StockGroupResponse> getGroups() {

@@ -45,11 +45,11 @@ Spring Boot RESTful API：從 PostgreSQL（Neon）讀取 Python 服務寫入的�
   升級 Spring Security 的版本後，舊的 session 可能無法讀回，屆時清空 `spring_session` 即可（使用者重新登入）
 - 寫入請求（POST / PUT / DELETE，含 `POST /api/logout`）需附 CSRF token：`GET /api/me` 會寫入 `XSRF-TOKEN` cookie，
   前端把它的值放進 `X-XSRF-TOKEN` 標頭
-- 既有 API 維持公開；`/api/holdings/**` 需要登入，未登入回 401
+- 既有 API 維持公開；`/api/holdings/**`、`/api/my-stocks/**`、`/api/notifications/**` 需要登入，未登入回 401
 
 ## 庫存（holdings）
 
-- 一律以登入者過濾：查不到（包含別人的）回 404；每人最多 200 筆；股票必須在觀察名單內，買進日期不可晚於今天、不可早於上市日
+- 一律以登入者過濾：查不到（包含別人的）回 404；每人最多 200 筆；股票必須在觀察名單內或自己的自選中（且已有資料），買進日期不可晚於今天、不可早於上市日
 - 手續費：`standard` = 成交金額 × 0.1425%、`discount` 再乘折數，兩者無條件捨去到元並套用最低手續費（未填為 20 元）；
   `actual` 照填。各券商規則不同，畫面標示為估算
 - 換算基準：價格與股利都是 Yahoo 依分割 / 配股 / 減資調整後的基準。有填買進日期時，依 `stock_actions` 中買進日之後的
@@ -106,6 +106,9 @@ export DB_URL='jdbc:postgresql://<host>:5432/<db>?sslmode=require' DB_USERNAME='
 | `PUT /api/holdings/{id}` / `DELETE /api/holdings/{id}` | **需登入、CSRF**。修改 / 刪除自己的一筆；別人的或不存在回 404；修改或刪除後會讓之前的賣出超過當時持有的股數時回 400 |
 | `POST /api/holdings/sales` | **需登入、CSRF**。新增一筆賣出：`symbol`、`sellDate`（必填）、`price`、`shares`（賣出當時的股數）、`feeMode` / `feeDiscount` / `minFee` / `fee`（同買進）、`taxMode`（`standard` 依稅率 / `actual`）、`tax`；回 201 與該筆（含先進先出的分配與已實現損益）。超過當時可賣的股數回 400 |
 | `PUT /api/holdings/sales/{id}` / `DELETE /api/holdings/sales/{id}` | **需登入、CSRF**。修改 / 刪除自己的一筆賣出 |
+| `GET /api/my-stocks` | **需登入**。我的自選（自行加入、不限觀察名單的股票），依加入時間排序：`symbol`、`name`、`addedAt`、`ready`（是否已有資料；剛加入的要等下一次每日更新）、`watchlist`（是否也在觀察名單）、`quote`（格式同 `GET /api/stocks`，沒有資料時為 null）；`limit` 為每人上限 |
+| `POST /api/my-stocks` | **需登入、CSRF**。加入一檔：`code`（不含 .TW / .TWO，例如 `6488`、`00878`）；以官方每日資料（最近 7 天）確認是目前上市、上櫃的股票或 ETF，並決定代號為 `.TW` 或 `.TWO`。每人最多 30 檔；全站自行加入、不在觀察名單的股票最多 200 檔（與 Python 的 `MAX_REQUESTED_STOCKS` 相同，已有人加入或在觀察名單的不受限）；格式錯誤、查不到、重複或超過上限回 400。下一次每日更新後就有 K 線、指標、參考價位，也可以加入庫存 |
+| `DELETE /api/my-stocks/{symbol}` | **需登入、CSRF**。移除自己的一檔（例如 `6488.TWO`）；不存在回 404。沒有人加入也沒有人持有的股票，每日更新就不再抓（資料保留） |
 | `GET /api/stocks/{symbol}/trades?strategy=&exitRule=` | 某檔股票的歷史回測交易（進出場日期、價格、股利、報酬）；`exitRule` 短線為 `hold_5`、`hold_10`、`hold_20`、`trailing_atr`，波段為 `ma60_exit`、`trailing_nocap`；波段策略只搭配波段出場（其他組合回 400） |
 
 ```bash
@@ -132,7 +135,7 @@ src/main/java/com/ugi/stock/
 ├── controller/   StockController（/api/stocks）、StrategyController（/api/strategies、/api/screener）、
 │                 BacktestController（/api/backtests、/api/stocks/{symbol}/trades）、
 │                 ReferenceLevelController（/api/stocks/{symbol}/levels）、StockGroupController（/api/groups）、
-│                 PortfolioController（/api/portfolio-backtests）、PaperController（/api/paper）、AuthController（/api/me）、HoldingController（/api/holdings）
+│                 PortfolioController（/api/portfolio-backtests）、PaperController（/api/paper）、AuthController（/api/me）、HoldingController（/api/holdings）、MyStockController（/api/my-stocks）
 ├── service/      StockService、StrategyService、BacktestService、PortfolioService、PaperService、ReferenceLevelService、AppUserService、HoldingService、TradingCosts（交易成本）、
 │                 Strategy / ExitRule / Horizon / StockGroup
 │                 （策略、出場規則、短線 / 波段、組別代碼，須與 Python 的 STRATEGIES / EXIT_RULES / STOCK_GROUPS 一致）
