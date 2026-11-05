@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>策略研究報告 R1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@600;700&display=swap" rel="stylesheet">
+<style>
+/* 研究報告：單欄閱讀版面，摘要在前、證據在後；數字表格與圖表為主角，裝飾最少 */
+:root {
+  color-scheme: light;
+  --bg: #f6f7f8;
+  --surface: #fcfcfb;
+  --ink: #15191e;
+  --ink-2: #4d5560;
+  --ink-3: #7a828c;
+  --line: #e1e4e8;
+  --accent: #2a78d6;
+  --bench: #8c939b;
+  --s-balanced: #2a78d6;
+  --s-core: #eb6834;
+  --s-strategy: #1baf7a;
+  --pass: #0ca30c;
+  --fail: #d03b3b;
+  --font-display: "Noto Serif TC", "Songti TC", serif;
+  --font-body: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121416;
+    --surface: #1a1c1f;
+    --ink: #eef0f2;
+    --ink-2: #b9c0c8;
+    --ink-3: #8a929b;
+    --line: #2c3036;
+    --accent: #3987e5;
+    --bench: #8a929b;
+    --s-balanced: #3987e5;
+    --s-core: #d95926;
+    --s-strategy: #199e70;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121416;
+  --surface: #1a1c1f;
+  --ink: #eef0f2;
+  --ink-2: #b9c0c8;
+  --ink-3: #8a929b;
+  --line: #2c3036;
+  --accent: #3987e5;
+  --bench: #8a929b;
+  --s-balanced: #3987e5;
+  --s-core: #d95926;
+  --s-strategy: #199e70;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.7 var(--font-body);
+}
+main {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 32px 20px 64px;
+  display: grid;
+  gap: 36px;
+}
+header { display: grid; gap: 6px; }
+h1, h2 { font-family: var(--font-display); text-wrap: balance; margin: 0; }
+h1 { font-size: 30px; line-height: 1.3; }
+h2 { font-size: 21px; line-height: 1.35; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+h3 { font-size: 16px; margin: 0; }
+p { margin: 0; max-width: 68ch; }
+.meta { color: var(--ink-3); font-size: 13px; }
+section { display: grid; gap: 14px; }
+ul { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 70ch; }
+.callout {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+  padding: 14px 18px;
+  display: grid;
+  gap: 8px;
+}
+.note { color: var(--ink-2); font-size: 14px; }
+.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; font-size: 14px; }
+th, td { padding: 8px 12px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+thead th { color: var(--ink-3); font-weight: 500; font-size: 12px; }
+tbody tr:last-child td { border-bottom: 0; }
+tr.recommended td { font-weight: 700; }
+.swatch { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 8px; }
+.sub { display: block; color: var(--ink-3); font-size: 12px; font-weight: 400; }
+.tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--accent); color: var(--accent); margin-left: 6px; font-weight: 500; }
+.pass, .fail { font-weight: 500; }
+.pass::before { content: "✓ "; color: var(--pass); }
+.fail::before { content: "✗ "; color: var(--fail); }
+.chart { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 12px 8px 4px; position: relative; }
+.chart svg { display: block; width: 100%; height: auto; }
+.chart text { fill: var(--ink-3); font: 11px var(--font-body); }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .label { font-size: 12px; font-weight: 500; fill: var(--ink-2); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 0 8px 8px; font-size: 13px; color: var(--ink-2); }
+.tooltip {
+  position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--line);
+  border-radius: 6px; padding: 8px 10px; font-size: 12px; line-height: 1.6; box-shadow: 0 4px 16px rgba(0,0,0,.12);
+  font-variant-numeric: tabular-nums; display: none; min-width: 170px;
+}
+.tooltip b { font-weight: 500; }
+.rates { display: grid; gap: 14px; }
+.rate-group { display: grid; gap: 4px; }
+.rate-row { display: grid; grid-template-columns: 170px 1fr 44px; gap: 10px; align-items: center; font-size: 13px; }
+.rate-bar { height: 10px; background: var(--line); border-radius: 0 4px 4px 0; position: relative; }
+.rate-bar span { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 0 4px 4px 0; }
+.rate-row .value { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.rules { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 14px; }
+.rules dt { color: var(--ink-3); }
+.rules dd { margin: 0; }
+@media (max-width: 560px) {
+  h1 { font-size: 25px; }
+  .rate-row { grid-template-columns: 116px 1fr 40px; }
+  .rules { grid-template-columns: 1fr; gap: 0 0; }
+  .rules dd { margin-bottom: 8px; }
+  th, td { padding: 7px 8px; }
+}
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main id="app">
+  <header>
+    <h1>策略研究報告 R1：散戶的核心＋衛星配置</h1>
+    <p class="meta" id="meta"></p>
+  </header>
+
+  <section aria-labelledby="s-summary">
+    <h2 id="s-summary">結論</h2>
+    <div class="callout" id="summary"></div>
+    <ul id="findings"></ul>
+  </section>
+
+  <section aria-labelledby="s-versions">
+    <h2 id="s-versions">三個版本與 0050 買進持有</h2>
+    <p class="note">本金 100 萬元、可買零股、扣除手續費與證交稅、含現金股利。每個版本分「每天收盤後看一次」與「每週五收盤後看一次」兩種操作方式。</p>
+    <div class="table-wrap"><table id="versions"></table></div>
+  </section>
+
+  <section aria-labelledby="s-curve">
+    <h2 id="s-curve">資金曲線（每天操作）</h2>
+    <p class="note">縱軸為對數刻度：每一格代表資金翻倍，同樣的高度差就是同樣的報酬率，早期與近期可以直接比較。滑鼠移到圖上可看各版本當週的資金。</p>
+    <div class="chart" id="curve-chart"></div>
+  </section>
+
+  <section aria-labelledby="s-drawdown">
+    <h2 id="s-drawdown">從高點回落的幅度：0050 與均衡版</h2>
+    <p class="note">每一天距離之前最高點跌了多少。均衡版在 2018、2020、2022 年的空頭中，衛星部分因大盤濾網停止開新倉、陸續停利出場，回落較淺；核心的 0050 部分則完整承受下跌。</p>
+    <div class="chart" id="drawdown-chart"></div>
+  </section>
+
+  <section aria-labelledby="s-years">
+    <h2 id="s-years">逐年報酬（每天操作）</h2>
+    <div class="table-wrap"><table id="years"></table></div>
+  </section>
+
+  <section aria-labelledby="s-rules">
+    <h2 id="s-rules">三個版本共用的規則</h2>
+    <dl class="rules">
+      <dt>選股訊號（複選）</dt><dd>「創 120 日新高」或「季線上揚時 MACD 黃金交叉」，任一出現就列為候選。</dd>
+      <dt>進場</dt><dd>訊號出現的隔天開盤買進；開盤已接近漲停（+9.5% 以上）則放棄。</dd>
+      <dt>部位大小</dt><dd>每一筆最多虧衛星資金的 1%：依停損距離（買價的 10%）計算股數，單一個股最多占衛星資金 20%，最多同時持有 10 檔。</dd>
+      <dt>大盤濾網</dt><dd>0050 收盤低於季線（60 日均線）時不開新倉；已持有的照出場規則處理，不會因此全部賣出。</dd>
+      <dt>出場</dt><dd>從買進後的最高收盤價回落 10%，隔天開盤賣出。</dd>
+      <dt>候選太多時</dt><dd>優先買 120 日漲幅較大的。</dd>
+      <dt>核心</dt><dd>0050，第一天買進後持有；每年第一個交易日調回目標比例。股利以現金保留。</dd>
+    </dl>
+  </section>
+
+  <section aria-labelledby="s-checks">
+    <h2 id="s-checks">怎麼確認不是巧合或程式錯誤</h2>
+    <ul id="method"></ul>
+    <div class="table-wrap"><table id="checks"></table></div>
+    <p class="note">「相鄰參數」：出場改成回落 15% 或 3 倍 ATR、核心比例上下調 20%。「隨機挑股」：同一天候選太多時改成隨機選，10 次中的最差、中位數、最好。基準 0050 的 Calmar 為 <span id="etf-calmar"></span>（前段 <span id="etf-first"></span>、後段 <span id="etf-second"></span>）。</p>
+  </section>
+
+  <section aria-labelledby="s-rates">
+    <h2 id="s-rates">哪些設定真的有用</h2>
+    <p class="note" id="rates-note"></p>
+    <div class="rates" id="rates"></div>
+  </section>
+
+  <section aria-labelledby="s-limits">
+    <h2 id="s-limits">限制：哪些數字要打折</h2>
+    <ul id="limits"></ul>
+  </section>
+
+  <section aria-labelledby="s-next">
+    <h2 id="s-next">接下來</h2>
+    <ul>
+      <li>你決定採用哪些版本後，進入 R2（月營收、法人資料與新策略）與 U1（網站上的「首次設定 → 建議組合」與「今天」首頁）。</li>
+      <li>可再評估：核心 0050 也加上較慢的保護（例如跌破年線時減碼一部分），降低「核心為主」版的回撤。</li>
+      <li>本報告只是回測研究，不構成投資建議；過去的表現不代表未來。</li>
+    </ul>
+  </section>
+</main>
+
+<script>
+const DATA = __REPORT_DATA__;
+
+const COLORS = { "0050 買進持有": "--bench", "核心為主": "--s-core", "均衡": "--s-balanced", "策略為主": "--s-strategy" };
+const color = (name) => getComputedStyle(document.documentElement).getPropertyValue(COLORS[name]).trim();
+const pct = (v, d = 1) => v == null ? "—" : `${(v * 100).toFixed(d)}%`;
+const signedPct = (v, d = 1) => v == null ? "—" : `${v > 0 ? "+" : ""}${(v * 100).toFixed(d)}%`;
+const num = (v, d = 2) => v == null ? "—" : v.toFixed(d);
+const wan = (v) => `${Math.round(v / 10000).toLocaleString("zh-TW")} 萬`;
+const el = (id) => document.getElementById(id);
+const swatch = (name, dashed) => `<span class="swatch" style="background:${dashed ? `repeating-linear-gradient(90deg, ${color(name)} 0 5px, transparent 5px 8px)` : color(name)}"></span>`;
+
+const LABELS = {
+  strategy: { high_120: "創 120 日新高", golden_cross_trend: "季線上揚時黃金交叉", ma_bullish: "均線多頭排列", break_ma20: "突破 20 日均線", golden_cross: "MACD 黃金交叉", ma20_cross_ma60: "月線穿越季線" },
+  exit: { pct10: "回落 10%", pct15: "回落 15%", pct20: "回落 20%", atr2: "2 倍 ATR", atr3: "3 倍 ATR", atr4: "4 倍 ATR", ma60: "跌破季線", atr3_tp20: "漲 20% 先賣一半＋3 ATR" },
+  filter: { none: "沒有濾網", no_new60: "跌破季線不開新倉", no_new120: "跌破半年線不開新倉", exit60: "跌破季線全部賣出" },
+  frequency: { daily: "每天", weekly: "每週" },
+  sizing: { equal: "每檔等額", risk: "依停損距離" },
+  core: { "0.0": "核心 0%", "0.3": "核心 30%", "0.5": "核心 50%", "0.7": "核心 70%" },
+};
+const FIELD_TITLES = { filter: "大盤濾網", exit: "出場方式", strategy: "選股訊號", frequency: "操作頻率", core: "核心比例", sizing: "部位大小" };
+
+function render() {
+  const [start, end] = DATA.period;
+  el("meta").textContent = `回測期間 ${start} ～ ${end}（資料到 ${DATA.asOf}）・觀察名單 ${DATA.stocks} 檔・前後段切分日 ${DATA.split}`;
+  const etf = DATA.rows[0].daily;
+  const rec = DATA.rows.find((r) => r.name === DATA.recommended);
+
+  el("summary").innerHTML = `
+    <h3>建議預設：均衡版（核心 0050 五成、策略選股五成）</h3>
+    <p>回測年化 ${pct(rec.daily.cagr)}、最大回撤 ${pct(rec.daily.max_drawdown)}；同期 0050 買進持有為年化 ${pct(etf.cagr)}、最大回撤 ${pct(etf.max_drawdown)}。
+    報酬沒有犧牲，回撤少了約 ${Math.round((rec.daily.max_drawdown - etf.max_drawdown) * 100)} 個百分點。每週操作的版本也可行，只是稍差。</p>`;
+  el("findings").innerHTML = [
+    `降低回撤最關鍵的是<strong>大盤濾網</strong>：0050 跌破季線時不開新倉。全部 ${DATA.scan.total.toLocaleString()} 組參數中，有這個濾網的通過率是沒有濾網的 4 倍以上；但「跌破就全部賣出」反而最差，太容易被洗出場。`,
+    `移動停利以<strong>回落 10%</strong> 或 3 倍 ATR 較好；回落 20%、跌破季線才賣都太寬，幾乎不通過。原本網站上的 3 倍 ATR 沒有搭配大盤濾網與部位大小，所以效果不明顯。`,
+    `<strong>核心比例越高，回撤反而越大</strong>：衛星在空頭時多半抱著現金，0050 卻沒有保護。但核心越多，數字越可信，因為倖存者偏差全在衛星部分。`,
+    `<strong>報酬數字要打折</strong>：觀察名單是今天的 0050 成分股，事後看都是贏家。同一批股票直接買進持有就有年化 ${pct(DATA.bias.sameStocks.cagr)}，比 0050 的 ${pct(etf.cagr)} 高出許多。可信的主要是「降低回撤」的部分。`,
+  ].map((t) => `<li>${t}</li>`).join("");
+
+  // 版本表
+  const head = `<thead><tr><th>版本</th><th>核心／衛星</th><th>年化報酬<span class="sub">每天／每週</span></th><th>最大回撤<span class="sub">每天／每週</span></th><th>Calmar<span class="sub">每天／每週</span></th><th>最長套牢<span class="sub">每天</span></th><th>最差年度<span class="sub">每天</span></th></tr></thead>`;
+  const body = DATA.rows.map((r) => {
+    const w = r.weekly;
+    const pair = (f, fmt) => w ? `${fmt(r.daily[f])}／${fmt(w[f])}` : fmt(r.daily[f]);
+    const isRec = r.name === DATA.recommended;
+    return `<tr class="${isRec ? "recommended" : ""}"><td>${swatch(r.name, r.core === 1)}${r.name}${isRec ? '<span class="tag">建議預設</span>' : ""}</td>
+      <td>${Math.round(r.core * 100)}／${Math.round((1 - r.core) * 100)}</td><td>${pair("cagr", pct)}</td><td>${pair("max_drawdown", pct)}</td>
+      <td>${pair("calmar", num)}</td><td>${r.daily.underwater_days} 天</td><td>${pct(r.daily.worst_year)}</td></tr>`;
+  }).join("");
+  el("versions").innerHTML = head + `<tbody>${body}</tbody>`;
+
+  // 逐年報酬
+  const years = Object.keys(DATA.series[0].years);
+  el("years").innerHTML = `<thead><tr><th>年度</th>${DATA.series.map((s) => `<th>${swatch(s.name, s.role === "benchmark")}${s.name}</th>`).join("")}</tr></thead><tbody>` +
+    years.map((y) => `<tr><td>${y}${y === years[0] ? '<span class="sub">從 11/23 起</span>' : ""}</td>${DATA.series.map((s) => `<td>${signedPct(s.years[y])}</td>`).join("")}</tr>`).join("") + "</tbody>";
+
+  // 檢查
+  el("etf-calmar").textContent = num(etf.calmar);
+  el("etf-first").textContent = num(etf.calmar_first);
+  el("etf-second").textContent = num(etf.calmar_second);
+  const ok = (v) => v > etf.calmar;
+  el("method").innerHTML = [
+    `新的模擬器設成舊網站的條件時，${DATA.legacy.runs} 次模擬每一天的資金都與舊版完全相同，確認計算方式一致。`,
+    `把資料截斷在 2021 年 5 月重跑，截斷前每一天的資金完全相同：沒有偷看未來的資料。`,
+    `只用前半段（${DATA.split} 以前）挑出表現最好的 100 組參數，其中 ${DATA.scan.firstHalfTop100BeatEtfSecond} 組在後半段仍勝過 0050。`,
+    `判斷標準在掃描前就寫進程式：最大回撤在 -35% 以內、Calmar 整段與前後段都勝過 0050、年化落後 0050 不超過 3 個百分點、規則本身勝過同批股票買進持有、相鄰參數多數也成立。`,
+  ].map((t) => `<li>${t}</li>`).join("");
+  el("checks").innerHTML = `<thead><tr><th>版本</th><th>前段／後段 Calmar</th><th>相鄰參數 Calmar</th><th>隨機挑股<span class="sub">最差／中位／最好</span></th><th>拿掉漲最多 5 檔</th><th>年化比 0050</th></tr></thead><tbody>` +
+    DATA.checks.map((c) => {
+      const all = [...c.halves, ...c.neighbors, c.random[0], c.without_top5].every(ok);
+      return `<tr><td class="${all ? "pass" : "fail"}">${c.name}・${LABELS.frequency[c.frequency]}</td><td>${c.halves.map((v) => num(v)).join("／")}</td>
+        <td>${c.neighbors.map((v) => num(v)).join("、")}</td><td>${c.random.map((v) => num(v)).join("／")}</td><td>${num(c.without_top5)}</td><td>${signedPct(c.return_gap)}</td></tr>`;
+    }).join("") + "</tbody>";
+
+  // 通過率
+  el("rates-note").textContent = `全部 ${DATA.scan.total.toLocaleString()} 組參數組合中，有 ${DATA.scan.passed} 組通過全部條件。下表是「固定某一個設定時，其他參數怎麼搭都通過的比例」：比例越高，代表這個設定越不挑搭配、越可靠。`;
+  el("rates").innerHTML = ["filter", "exit", "strategy", "frequency", "core", "sizing"].map((field) => {
+    const rows = [...DATA.scan.rates[field]].sort((a, b) => b[1] - a[1]);
+    return `<div class="rate-group"><h3>${FIELD_TITLES[field]}</h3>` + rows.map(([value, rate]) =>
+      `<div class="rate-row"><span>${LABELS[field][value] ?? value}</span><span class="rate-bar" role="img" aria-label="${Math.round(rate * 100)}%"><span style="width:${rate * 100}%"></span></span><span class="value">${Math.round(rate * 100)}%</span></div>`).join("") + "</div>";
+  }).join("");
+
+  // 限制
+  const top5 = DATA.bias.top5.map(([s, g]) => `${s.replace(/\.TWO?$/, "")}（${Math.round(g)} 倍）`).join("、");
+  el("limits").innerHTML = [
+    `<strong>倖存者偏差</strong>：觀察名單是 2026 年的 0050 成分股加自選股，等於用結果回頭挑股票。同批 ${DATA.stocks} 檔等額買進持有：年化 ${pct(DATA.bias.sameStocks.cagr)}、回撤 ${pct(DATA.bias.sameStocks.max_drawdown)}；拿掉 11 年漲最多的 5 檔（${top5}）後仍有 ${pct(DATA.bias.withoutTop5.cagr)}。策略部分的報酬可能因此高估約 5～11 個百分點，確切多少無法用現有資料估計。`,
+    `<strong>期間</strong>：${DATA.period[0].slice(0, 4)}～${DATA.period[1].slice(0, 4)} 年台股整體是多頭（0050 年化 ${pct(etf.cagr)}），只經歷 2018、2020、2022 三次較大的下跌；更長、更深的空頭沒有被測試到。`,
+    `<strong>成交假設</strong>：一定能以開盤價或收盤價成交，沒有滑價；跌停賣不掉、停牌的情況沒有完整模擬。手續費以公定費率 0.1425% 計（多數券商有折扣，實際成本較低）。`,
+    `<strong>多重比較</strong>：從 ${DATA.scan.total.toLocaleString()} 組中挑選，難免有運氣成分；所以版本不是挑分數最高的那組，而是挑相鄰參數都穩定的設定。`,
+  ].map((t) => `<li>${t}</li>`).join("");
+
+  drawCurve();
+  drawDrawdown();
+}
+
+// ---- 圖表（SVG）----
+function scaleTime(dates, x0, x1) {
+  const t0 = Date.parse(dates[0]), t1 = Date.parse(dates[dates.length - 1]);
+  return (d) => x0 + (Date.parse(d) - t0) / (t1 - t0) * (x1 - x0);
+}
+
+function lineChart(container, { series, yFor, yTicks, yLabel, tooltipValue, endLabels }) {
+  const width = Math.max(container.clientWidth - 16, 300);
+  const compact = width < 520;
+  const height = compact ? 260 : 340;
+  const m = { top: 10, right: endLabels ? (compact ? 64 : 84) : 16, bottom: 26, left: compact ? 52 : 64 };
+  const dates = series[0].points.map((p) => p[0]);
+  const x = scaleTime(dates, m.left, width - m.right);
+  const y = yFor(m.top, height - m.bottom);
+  const years = [...new Set(dates.map((d) => d.slice(0, 4)))].filter((yr, i) => i > 0 && (!compact || Number(yr) % 2 === 0));
+  let svg = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${yLabel}">`;
+  for (const t of yTicks) svg += `<line class="grid" x1="${m.left}" x2="${width - m.right}" y1="${y(t.v)}" y2="${y(t.v)}"/><text x="${m.left - 8}" y="${y(t.v) + 4}" text-anchor="end">${t.label}</text>`;
+  for (const yr of years) svg += `<text x="${x(`${yr}-01-01`)}" y="${height - 6}" text-anchor="middle">${yr}</text>`;
+  // 先畫基準，推薦版本最後畫（在最上層）
+  const order = [...series].sort((a, b) => (a.role === "benchmark" ? -1 : 0) - (b.role === "benchmark" ? -1 : 0) || (a.name === DATA.recommended) - (b.name === DATA.recommended));
+  const labelYs = [];
+  for (const s of order) {
+    const d = s.points.map((p, i) => `${i ? "L" : "M"}${x(p[0]).toFixed(1)},${y(s.value(p)).toFixed(1)}`).join("");
+    const w = s.name === DATA.recommended ? 2.5 : 1.5;
+    svg += `<path d="${d}" fill="none" stroke="${color(s.name)}" stroke-width="${w}" stroke-linejoin="round" ${s.role === "benchmark" ? 'stroke-dasharray="5 3"' : ""}/>`;
+    const last = s.points[s.points.length - 1];
+    labelYs.push({ name: s.name, y: y(s.value(last)) });
+  }
+  if (endLabels) {
+    labelYs.sort((a, b) => a.y - b.y);
+    for (let i = 1; i < labelYs.length; i++) labelYs[i].y = Math.max(labelYs[i].y, labelYs[i - 1].y + 14);  // 標籤不重疊
+    for (const l of labelYs) svg += `<text class="label" x="${width - m.right + 6}" y="${l.y + 4}">${l.name.replace(" 買進持有", "")}</text>`;
+  }
+  svg += `<line id="${container.id}-cross" class="grid" x1="0" x2="0" y1="${m.top}" y2="${height - m.bottom}" style="display:none;stroke:var(--ink-3)"/>`;
+  svg += `<rect x="${m.left}" y="${m.top}" width="${width - m.left - m.right}" height="${height - m.top - m.bottom}" fill="transparent" id="${container.id}-hit"/></svg>`;
+  const legend = `<div class="legend">${series.map((s) => `<span>${swatch(s.name, s.role === "benchmark")}${s.name}</span>`).join("")}</div>`;
+  container.innerHTML = legend + svg + `<div class="tooltip" id="${container.id}-tip"></div>`;
+
+  const hit = el(`${container.id}-hit`), cross = el(`${container.id}-cross`), tip = el(`${container.id}-tip`);
+  const svgEl = container.querySelector("svg");
+  const show = (evt) => {
+    const box = svgEl.getBoundingClientRect();
+    const px = (evt.clientX - box.left) * width / box.width;
+    let best = 0;
+    for (let i = 0; i < dates.length; i++) if (Math.abs(x(dates[i]) - px) < Math.abs(x(dates[best]) - px)) best = i;
+    const day = dates[best];
+    cross.setAttribute("x1", x(day)); cross.setAttribute("x2", x(day)); cross.style.display = "";
+    const rows = series.map((s) => {
+      const p = s.points.find((q) => q[0] === day) ?? s.points[Math.min(best, s.points.length - 1)];
+      return `<div>${swatch(s.name, s.role === "benchmark")}${s.name}　<b>${tooltipValue(s.value(p))}</b></div>`;
+    }).join("");
+    tip.innerHTML = `<div>${day} 當週</div>${rows}`;
+    tip.style.display = "block";
+    const left = (x(day) / width) * box.width + 16;
+    tip.style.left = `${Math.min(left, container.clientWidth - tip.offsetWidth - 8)}px`;
+    tip.style.top = "40px";
+  };
+  hit.addEventListener("pointermove", show);
+  hit.addEventListener("pointerdown", show);
+  hit.addEventListener("pointerleave", () => { tip.style.display = "none"; cross.style.display = "none"; });
+}
+
+function drawCurve() {
+  const series = DATA.series.map((s) => ({ ...s, value: (p) => p[1] }));
+  const values = series.flatMap((s) => s.points.map((p) => p[1]));
+  const lo = Math.min(...values), hi = Math.max(...values);
+  const ticks = [];
+  for (let v = 1e6 / 2; v <= hi * 1.2; v *= 2) if (v >= lo * 0.8) ticks.push({ v, label: wan(v) });
+  const yLo = Math.log(Math.min(lo, ticks[0].v) * 0.95), yHi = Math.log(hi * 1.05);
+  lineChart(el("curve-chart"), {
+    series, endLabels: true, yLabel: "資金曲線，對數刻度", tooltipValue: wan,
+    yTicks: ticks, yFor: (top, bottom) => (v) => bottom - (Math.log(v) - yLo) / (yHi - yLo) * (bottom - top),
+  });
+}
+
+function drawDrawdown() {
+  const pick = DATA.series.filter((s) => s.role === "benchmark" || s.name === DATA.recommended);
+  const series = pick.map((s) => {
+    let peak = 0;
+    const points = s.points.map(([d, v]) => { peak = Math.max(peak, v); return [d, v / peak - 1]; });
+    return { ...s, points, value: (p) => p[1] };
+  });
+  const lo = Math.min(...series.flatMap((s) => s.points.map((p) => p[1])));
+  const floor = Math.floor(lo * 10) / 10;
+  const ticks = [];
+  for (let v = 0; v >= floor - 1e-9; v -= 0.1) ticks.push({ v, label: v === 0 ? "0%" : `${Math.round(v * 100)}%` });
+  lineChart(el("drawdown-chart"), {
+    series, endLabels: false, yLabel: "從高點回落的幅度", tooltipValue: (v) => pct(v),
+    yTicks: ticks, yFor: (top, bottom) => (v) => top + (0 - v) / (0 - floor) * (bottom - top),
+  });
+}
+
+render();
+let resizeTimer;
+new ResizeObserver(() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { drawCurve(); drawDrawdown(); }, 150); }).observe(document.body);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+new MutationObserver(render).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+</script>
+</body>
+</html>
